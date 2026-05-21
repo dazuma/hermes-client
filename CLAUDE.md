@@ -41,6 +41,7 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 - **Dependencies:** the client is built on the [`http`](https://github.com/httprb/http) gem (`~> 6.0`) for HTTP requests and [`ld-eventsource`](https://github.com/launchdarkly/ruby-eventsource) (`~> 2.6`) for consuming the Server-Sent Event streams the API emits.
 - **Ruby support:** `required_ruby_version >= 3.4`. All files use `# frozen_string_literal: true`.
 - **Docs as a gate:** because `toys yardoc` fails on undocumented objects, document public API as you add it.
+- **Commit messages:** Use Conventional Commits prefixes. Use `chore:` for changes that are not shipped in the packaged gem (e.g. `devdocs/`, tooling, CI), and reserve `feat:`/`fix:`/etc. for changes to the gem's user-visible code.
 
 ## Testing conventions
 
