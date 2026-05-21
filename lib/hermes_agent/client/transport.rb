@@ -35,11 +35,28 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def get(path)
-        response = client.get(url_for(path))
+        response = request { client.get(url_for(path)) }
         handle(response)
       end
 
       private
+
+      ##
+      # Run an HTTP request, translating the `http` gem's transport-level
+      # failures into the client's {Error} hierarchy.
+      #
+      # @yield The block that issues the request and returns its response.
+      # @return [HTTP::Response]
+      # @raise [TimeoutError] On an open or read timeout.
+      # @raise [ConnectionError] On a socket, DNS, or TLS failure.
+      #
+      def request
+        yield
+      rescue ::HTTP::TimeoutError => e
+        raise TimeoutError, e.message
+      rescue ::HTTP::ConnectionError => e
+        raise ConnectionError, e.message
+      end
 
       ##
       # @return [HTTP::Client] A configured `http` client with auth and
@@ -79,8 +96,8 @@ module HermesAgent
       def handle(response)
         body = response.body.to_s
         unless response.status.success?
-          raise APIError.new("Unexpected HTTP status #{response.code}",
-                             status: response.code, body: body)
+          raise APIError.from_response(status: response.code, body: body,
+                                       headers: response.headers.to_h)
         end
         body.empty? ? {} : ::JSON.parse(body)
       end

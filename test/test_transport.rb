@@ -56,13 +56,38 @@ describe ::HermesAgent::Client::Transport do
     assert_requested(stub)
   end
 
-  it "raises APIError carrying the status and body on a non-2xx response" do
+  it "raises a status-mapped APIError carrying the status and body" do
     stub_request(:get, "https://example.test/health")
       .to_return(status: 503, body: "down for maintenance")
-    error = assert_raises(::HermesAgent::Client::APIError) do
+    error = assert_raises(::HermesAgent::Client::ServerError) do
       transport(base_url: "https://example.test").get("/health")
     end
     assert_equal(503, error.status)
     assert_equal("down for maintenance", error.body)
+  end
+
+  it "parses a structured error payload onto the raised error" do
+    body = '{"error":{"message":"Invalid API key","type":"invalid_request_error",' \
+           '"code":"invalid_api_key"}}'
+    stub_request(:get, "https://example.test/health").to_return(status: 401, body: body)
+    error = assert_raises(::HermesAgent::Client::AuthenticationError) do
+      transport(base_url: "https://example.test").get("/health")
+    end
+    assert_equal("Invalid API key", error.message)
+    assert_equal("invalid_api_key", error.error["code"])
+  end
+
+  it "maps an HTTP timeout to TimeoutError" do
+    stub_request(:get, "https://example.test/health").to_raise(::HTTP::TimeoutError)
+    assert_raises(::HermesAgent::Client::TimeoutError) do
+      transport(base_url: "https://example.test").get("/health")
+    end
+  end
+
+  it "maps a connection failure to ConnectionError" do
+    stub_request(:get, "https://example.test/health").to_raise(::HTTP::ConnectionError)
+    assert_raises(::HermesAgent::Client::ConnectionError) do
+      transport(base_url: "https://example.test").get("/health")
+    end
   end
 end
