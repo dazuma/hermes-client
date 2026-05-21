@@ -151,7 +151,8 @@ describe "chat" do
 
   if integration_port
     let(:client) do
-      ::HermesAgent::Client.new(base_url: "http://localhost:#{integration_port}")
+      ::HermesAgent::Client.new(base_url: "http://localhost:#{integration_port}",
+                                api_key: ::HermesAgent::Tests.integration_api_key)
     end
 
     it "completes a chat turn against the live gateway" do

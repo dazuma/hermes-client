@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 require "minitest/autorun"
 require "minitest/focus"
 require "minitest/rg"
@@ -9,6 +11,13 @@ require "hermes-client"
 module HermesAgent
   # Shared support code for the test suite.
   module Tests
+    # The API key the integration gateway is launched with (and that
+    # authenticated integration clients should send), or nil when integration
+    # tests are not running.
+    class << self
+      attr_accessor :integration_api_key
+    end
+
     # A stand-in for Transport in unit tests: it records the path (and, for
     # #post, the body) it was asked for and returns a canned payload instead of
     # making a real HTTP request.
@@ -42,8 +51,10 @@ hermes_profile = ENV["HERMES_CLIENT_INTEGRATION_PROFILE"]
 if hermes_port && hermes_profile
   require "exec_service"
   puts "Starting test gateway on port #{hermes_port}"
+  api_key = ::SecureRandom.hex(24)
+  ::HermesAgent::Tests.integration_api_key = api_key
   cmd = ["hermes", "-p", hermes_profile, "gateway", "run"]
-  env = {"API_SERVER_PORT" => hermes_port}
+  env = {"API_SERVER_PORT" => hermes_port, "API_SERVER_KEY" => api_key}
   test_gateway = ::ExecService.new.exec(cmd, background: true, env: env)
   puts "Launched test gateway with PID=#{test_gateway.pid}"
   ok = false
