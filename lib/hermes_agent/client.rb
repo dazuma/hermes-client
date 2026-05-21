@@ -9,6 +9,7 @@ require "hermes_agent/client/errors"
 require "hermes_agent/client/transport"
 require "hermes_agent/client/resources/capabilities"
 require "hermes_agent/client/resources/health"
+require "hermes_agent/client/resources/models"
 
 ##
 # Classes related to the Hermes agent
@@ -68,6 +69,14 @@ module HermesAgent
     #
     def health
       @health ||= Resources::Health.new(@transport)
+    end
+
+    ##
+    # The models resource (discovery of advertised models).
+    # @return [Resources::Models]
+    #
+    def models
+      @models ||= Resources::Models.new(@transport)
     end
   end
 end
