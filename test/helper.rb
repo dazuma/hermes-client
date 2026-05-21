@@ -6,6 +6,27 @@ require "minitest/rg"
 
 require "hermes-client"
 
+module HermesAgent
+  # Shared support code for the test suite.
+  module Tests
+    # A stand-in for Transport in unit tests: it records the path it was asked
+    # for and returns a canned payload instead of making a real HTTP request.
+    class FakeTransport
+      def initialize(response = {})
+        @response = response
+      end
+
+      # The path passed to the most recent #get call.
+      attr_reader :requested_path
+
+      def get(path)
+        @requested_path = path
+        @response
+      end
+    end
+  end
+end
+
 hermes_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
 hermes_profile = ENV["HERMES_CLIENT_INTEGRATION_PROFILE"]
 if hermes_port && hermes_profile
