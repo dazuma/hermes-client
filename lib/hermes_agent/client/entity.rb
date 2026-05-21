@@ -49,7 +49,7 @@ module HermesAgent
       # the same class wrapping equal payload data.
       #
       # @param other [Object] The object to compare against.
-      # @return [Boolean]
+      # @return [boolean]
       #
       def ==(other)
         other.instance_of?(self.class) && other.to_h == @data
@@ -60,7 +60,7 @@ module HermesAgent
       # with {#hash}).
       #
       # @param other [Object] The object to compare against.
-      # @return [Boolean]
+      # @return [boolean]
       #
       def eql?(other)
         self == other

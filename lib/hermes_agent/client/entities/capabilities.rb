@@ -20,9 +20,9 @@ module HermesAgent
 
         ##
         # Whether authentication is required.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def required
+        def required?
           self["required"]
         end
       end
@@ -49,9 +49,9 @@ module HermesAgent
 
         ##
         # Whether the runtime is split between client and server.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def split_runtime
+        def split_runtime?
           self["split_runtime"]
         end
 
@@ -74,97 +74,97 @@ module HermesAgent
       class Features < Entity
         ##
         # Whether the chat-completions endpoint is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def chat_completions
+        def chat_completions?
           self["chat_completions"]
         end
 
         ##
         # Whether chat-completions streaming is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def chat_completions_streaming
+        def chat_completions_streaming?
           self["chat_completions_streaming"]
         end
 
         ##
         # Whether the Responses API is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def responses_api
+        def responses_api?
           self["responses_api"]
         end
 
         ##
         # Whether Responses API streaming is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def responses_streaming
+        def responses_streaming?
           self["responses_streaming"]
         end
 
         ##
         # Whether run submission is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def run_submission
+        def run_submission?
           self["run_submission"]
         end
 
         ##
         # Whether run status polling is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def run_status
+        def run_status?
           self["run_status"]
         end
 
         ##
         # Whether the run events SSE stream is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def run_events_sse
+        def run_events_sse?
           self["run_events_sse"]
         end
 
         ##
         # Whether stopping a run is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def run_stop
+        def run_stop?
           self["run_stop"]
         end
 
         ##
         # Whether responding to a run approval request is supported.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def run_approval_response
+        def run_approval_response?
           self["run_approval_response"]
         end
 
         ##
         # Whether the server emits custom tool-progress events.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def tool_progress_events
+        def tool_progress_events?
           self["tool_progress_events"]
         end
 
         ##
         # Whether the server emits approval events.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def approval_events
+        def approval_events?
           self["approval_events"]
         end
 
         ##
         # Whether CORS is enabled.
-        # @return [Boolean, nil]
+        # @return [boolean, nil]
         #
-        def cors
+        def cors?
           self["cors"]
         end
 

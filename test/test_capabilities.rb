@@ -6,13 +6,13 @@ describe ::HermesAgent::Client::Entities::Auth do
   it "reads the auth fields" do
     auth = ::HermesAgent::Client::Entities::Auth.new("type" => "bearer", "required" => true)
     assert_equal("bearer", auth.type)
-    assert_equal(true, auth.required)
+    assert_equal(true, auth.required?)
   end
 
   it "returns nil for fields when absent" do
     auth = ::HermesAgent::Client::Entities::Auth.new({})
     assert_nil(auth.type)
-    assert_nil(auth.required)
+    assert_nil(auth.required?)
   end
 end
 
@@ -26,7 +26,7 @@ describe ::HermesAgent::Client::Entities::Runtime do
     )
     assert_equal("server_agent", runtime.mode)
     assert_equal("server", runtime.tool_execution)
-    assert_equal(false, runtime.split_runtime)
+    assert_equal(false, runtime.split_runtime?)
     assert_equal("The API server creates a server-side Hermes AIAgent.", runtime.description)
   end
 
@@ -34,7 +34,7 @@ describe ::HermesAgent::Client::Entities::Runtime do
     runtime = ::HermesAgent::Client::Entities::Runtime.new({})
     assert_nil(runtime.mode)
     assert_nil(runtime.tool_execution)
-    assert_nil(runtime.split_runtime)
+    assert_nil(runtime.split_runtime?)
     assert_nil(runtime.description)
   end
 end
@@ -59,18 +59,18 @@ describe ::HermesAgent::Client::Entities::Features do
 
   it "reads each boolean feature flag" do
     features = ::HermesAgent::Client::Entities::Features.new(features_hash)
-    assert_equal(true, features.chat_completions)
-    assert_equal(true, features.chat_completions_streaming)
-    assert_equal(true, features.responses_api)
-    assert_equal(true, features.responses_streaming)
-    assert_equal(true, features.run_submission)
-    assert_equal(true, features.run_status)
-    assert_equal(true, features.run_events_sse)
-    assert_equal(true, features.run_stop)
-    assert_equal(true, features.run_approval_response)
-    assert_equal(true, features.tool_progress_events)
-    assert_equal(true, features.approval_events)
-    assert_equal(false, features.cors)
+    assert_equal(true, features.chat_completions?)
+    assert_equal(true, features.chat_completions_streaming?)
+    assert_equal(true, features.responses_api?)
+    assert_equal(true, features.responses_streaming?)
+    assert_equal(true, features.run_submission?)
+    assert_equal(true, features.run_status?)
+    assert_equal(true, features.run_events_sse?)
+    assert_equal(true, features.run_stop?)
+    assert_equal(true, features.run_approval_response?)
+    assert_equal(true, features.tool_progress_events?)
+    assert_equal(true, features.approval_events?)
+    assert_equal(false, features.cors?)
   end
 
   it "reads the session header names" do
@@ -81,8 +81,8 @@ describe ::HermesAgent::Client::Entities::Features do
 
   it "returns nil for features when absent" do
     features = ::HermesAgent::Client::Entities::Features.new({})
-    assert_nil(features.chat_completions)
-    assert_nil(features.cors)
+    assert_nil(features.chat_completions?)
+    assert_nil(features.cors?)
     assert_nil(features.session_continuity_header)
     assert_nil(features.session_key_header)
   end
@@ -143,7 +143,7 @@ describe ::HermesAgent::Client::Entities::Capabilities do
   it "wraps features in a Features entity" do
     caps = ::HermesAgent::Client::Entities::Capabilities.new(payload)
     assert_instance_of(::HermesAgent::Client::Entities::Features, caps.features)
-    assert_equal(true, caps.features.chat_completions)
+    assert_equal(true, caps.features.chat_completions?)
   end
 
   it "wraps each endpoint value in an Endpoint entity, keyed by name" do
@@ -203,7 +203,7 @@ describe "capabilities" do
       assert_equal("hermes.api_server.capabilities", caps.object)
       assert_equal("bearer", caps.auth.type)
       refute_nil(caps.runtime.mode)
-      assert_equal(true, caps.features.chat_completions)
+      assert_equal(true, caps.features.chat_completions?)
       models = caps.endpoints["models"]
       assert_instance_of(::HermesAgent::Client::Entities::Endpoint, models)
       assert_equal("/v1/models", models.path)
