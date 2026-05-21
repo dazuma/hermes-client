@@ -76,6 +76,21 @@ describe ::HermesAgent::Client::Transport do
     assert_equal("Invalid API key", error.message)
   end
 
+  it "stream_post returns a body that yields the response chunks" do
+    stub_request(:post, "https://example.test/v1/chat/completions")
+      .to_return(status: 200, body: "data: {\"n\":1}\n\n")
+    body = transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
+    assert_equal("data: {\"n\":1}\n\n", body.to_a.join)
+  end
+
+  it "stream_post raises a status-mapped APIError before streaming on an error response" do
+    stub_request(:post, "https://example.test/v1/chat/completions")
+      .to_return(status: 401, body: '{"error":{"message":"Invalid API key"}}')
+    assert_raises(::HermesAgent::Client::AuthenticationError) do
+      transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
+    end
+  end
+
   it "joins base_url and path without a doubled slash" do
     stub = stub_request(:get, "https://example.test/health").to_return(status: 200, body: "{}")
     transport(base_url: "https://example.test/").get("/health")

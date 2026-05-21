@@ -65,14 +65,15 @@ module HermesAgent
     # #post, the body) it was asked for and returns a canned payload instead of
     # making a real HTTP request.
     class FakeTransport
-      def initialize(response = {})
+      def initialize(response = {}, stream_chunks = [])
         @response = response
+        @stream_chunks = stream_chunks
       end
 
       # The path passed to the most recent request.
       attr_reader :requested_path
 
-      # The body passed to the most recent #post call.
+      # The body passed to the most recent #post / #stream_post call.
       attr_reader :requested_body
 
       def get(path)
@@ -84,6 +85,12 @@ module HermesAgent
         @requested_path = path
         @requested_body = body
         @response
+      end
+
+      def stream_post(path, body)
+        @requested_path = path
+        @requested_body = body
+        @stream_chunks
       end
     end
   end

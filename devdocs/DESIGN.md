@@ -19,9 +19,12 @@ acceptable as our understanding improves.
 - A small, idiomatic Ruby client covering the server's HTTP and SSE surface.
 - Organized by resource, discoverable, and forgiving of API fields we have not
   yet mapped.
-- Minimal dependencies: [`http`](https://github.com/httprb/http) for requests
-  and [`ld-eventsource`](https://github.com/launchdarkly/ruby-eventsource) for
-  Server-Sent Event streams.
+- Minimal dependencies: [`http`](https://github.com/httprb/http) for requests.
+  Server-Sent Event streams are parsed in-house (`Stream`) over the same `http`
+  connection — no separate SSE dependency. (We evaluated `ld-eventsource` but
+  its push/callback model, own connection ownership, and auto-reconnect were a
+  poor fit for one-shot request/response streams behind our pull-based
+  block-or-enumerator contract; raw SSE framing is ~simple and fully tested.)
 
 ## Conventions
 
@@ -369,11 +372,17 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
   connection, attaches the `Authorization` (and optional `Idempotency-Key`)
   headers, serializes/parses JSON, maps status codes to the error hierarchy,
   and exposes `get` / `post` / `patch` / `delete`. It also opens SSE streams
-  (handing the connection to `Stream`).
+  via `stream_post` — checking the response status up front (so errors raise
+  before any streaming) and handing the live response body to `Stream`.
 - **Resource objects** are thin: they build paths and params and delegate to
   `Transport`, wrapping results in the appropriate `Entity` subclass.
-- **`Stream`** wraps `ld-eventsource`, parses events into wrapper objects, and
-  implements the block-or-enumerator contract.
+- **`Stream`** consumes the response body's byte chunks, parses SSE frames
+  in-house (no external SSE library), wraps each frame's `data` payload in an
+  event wrapper, and implements the block-or-enumerator contract. It is
+  single-pass and HTTP-agnostic (it consumes anything yielding String chunks
+  via `#each`), and builds the final aggregated object via an injected
+  aggregator — for chat, `ChatCompletion.from_chunks` (the chat stream sends no
+  final aggregate object, so it is reconstructed from the deltas).
 - **`Entity`** is the wrapper base (method readers + `#to_h` + `#[]`).
 
 This keeps auth, error mapping, and JSON handling in one place and makes the

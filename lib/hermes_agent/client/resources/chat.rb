@@ -41,6 +41,35 @@ module HermesAgent
           body = {messages: messages, **extra}
           Entities::ChatCompletion.new(@transport.post("/v1/chat/completions", body))
         end
+
+        ##
+        # Create a chat completion, streaming the response.
+        #
+        # With a block, each {Entities::ChatCompletionChunk} is yielded as it
+        # arrives and the assembled {Entities::ChatCompletion} is returned once
+        # the stream closes. Without a block, a {Stream} is returned for the
+        # caller to iterate; its {Stream#result} is the assembled completion.
+        #
+        # @param messages [Array<Hash>] The OpenAI-style message array (see
+        #     {#create}).
+        # @param extra [Hash] Additional request-body fields merged into the
+        #     body as-is.
+        # @yieldparam chunk [Entities::ChatCompletionChunk] Each streamed chunk.
+        # @return [Entities::ChatCompletion, Stream] The assembled completion
+        #     when a block is given, otherwise the {Stream}.
+        # @raise [APIError] If the server returns a non-2xx response.
+        #
+        def stream_create(messages:, **extra, &block)
+          body = {messages: messages, stream: true, **extra}
+          chunks = @transport.stream_post("/v1/chat/completions", body)
+          stream = Stream.new(chunks, event_class: Entities::ChatCompletionChunk, terminator: "[DONE]") do |events|
+            Entities::ChatCompletion.from_chunks(events)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          stream.result
+        end
       end
     end
   end

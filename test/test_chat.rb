@@ -112,6 +112,102 @@ describe ::HermesAgent::Client::Entities::ChatCompletion do
   end
 end
 
+describe ::HermesAgent::Client::Entities::ChatCompletionChunk do
+  let(:role_chunk) do
+    {
+      "id" => "chatcmpl-1", "object" => "chat.completion.chunk", "created" => 1, "model" => "hermes-test",
+      "choices" => [{"index" => 0, "delta" => {"role" => "assistant"}, "finish_reason" => nil}]
+    }
+  end
+  let(:content_chunk) do
+    {
+      "object" => "chat.completion.chunk",
+      "choices" => [{"index" => 0, "delta" => {"content" => "Hello"}, "finish_reason" => nil}],
+    }
+  end
+  let(:final_chunk) do
+    {
+      "object" => "chat.completion.chunk",
+      "choices" => [{"index" => 0, "delta" => {}, "finish_reason" => "stop"}],
+      "usage" => {"prompt_tokens" => 1, "completion_tokens" => 2, "total_tokens" => 3},
+    }
+  end
+
+  it "reads the scalar fields" do
+    chunk = ::HermesAgent::Client::Entities::ChatCompletionChunk.new(role_chunk)
+    assert_equal("chatcmpl-1", chunk.id)
+    assert_equal("chat.completion.chunk", chunk.object)
+    assert_equal(1, chunk.created)
+    assert_equal("hermes-test", chunk.model)
+  end
+
+  it "exposes the incremental content as delta and the role" do
+    assert_equal("assistant", ::HermesAgent::Client::Entities::ChatCompletionChunk.new(role_chunk).role)
+    assert_equal("Hello", ::HermesAgent::Client::Entities::ChatCompletionChunk.new(content_chunk).delta)
+  end
+
+  it "returns nil delta when the chunk carries no content" do
+    assert_nil(::HermesAgent::Client::Entities::ChatCompletionChunk.new(role_chunk).delta)
+  end
+
+  it "exposes finish_reason and usage on the final chunk" do
+    chunk = ::HermesAgent::Client::Entities::ChatCompletionChunk.new(final_chunk)
+    assert_equal("stop", chunk.finish_reason)
+    assert_instance_of(::HermesAgent::Client::Entities::ChatUsage, chunk.usage)
+    assert_equal(3, chunk.usage.total_tokens)
+  end
+
+  it "returns nil for fields when absent" do
+    chunk = ::HermesAgent::Client::Entities::ChatCompletionChunk.new({})
+    assert_nil(chunk.id)
+    assert_nil(chunk.delta)
+    assert_nil(chunk.role)
+    assert_nil(chunk.finish_reason)
+    assert_nil(chunk.usage)
+  end
+end
+
+describe "ChatCompletion.from_chunks" do
+  let(:chunks) do
+    [
+      {"id" => "chatcmpl-1", "object" => "chat.completion.chunk", "created" => 7, "model" => "hermes-test",
+       "choices" => [{"index" => 0, "delta" => {"role" => "assistant"}, "finish_reason" => nil}]},
+      {"object" => "chat.completion.chunk",
+       "choices" => [{"index" => 0, "delta" => {"content" => "Hello"}, "finish_reason" => nil}]},
+      {"object" => "chat.completion.chunk",
+       "choices" => [{"index" => 0, "delta" => {"content" => " world"}, "finish_reason" => "stop"}],
+       "usage" => {"prompt_tokens" => 1, "completion_tokens" => 2, "total_tokens" => 3}},
+    ].map { |hash| ::HermesAgent::Client::Entities::ChatCompletionChunk.new(hash) }
+  end
+
+  it "reconstructs a ChatCompletion from streamed chunks" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks(chunks)
+    assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
+    assert_equal("chatcmpl-1", completion.id)
+    assert_equal("chat.completion", completion.object)
+    assert_equal(7, completion.created)
+    assert_equal("hermes-test", completion.model)
+  end
+
+  it "assembles the message from the deltas" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks(chunks)
+    choice = completion.choices.first
+    assert_equal("assistant", choice.message.role)
+    assert_equal("Hello world", choice.message.content)
+    assert_equal("stop", choice.finish_reason)
+  end
+
+  it "carries the usage from the final chunk" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks(chunks)
+    assert_equal(3, completion.usage.total_tokens)
+  end
+
+  it "returns an empty-content completion for no chunks" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks([])
+    assert_equal("", completion.choices.first.message.content)
+  end
+end
+
 describe ::HermesAgent::Client::Resources::Chat do
   let(:transport) do
     ::HermesAgent::Tests::FakeTransport.new("object" => "chat.completion")
@@ -146,6 +242,50 @@ describe ::HermesAgent::Client::Resources::Chat do
   end
 end
 
+describe "Resources::Chat#stream_create" do
+  let(:stream_chunks) do
+    [
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+      "data: {\"object\":\"chat.completion.chunk\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+      "data: {\"object\":\"chat.completion.chunk\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]," \
+      "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n",
+      "data: [DONE]\n\n",
+    ]
+  end
+  let(:transport) { ::HermesAgent::Tests::FakeTransport.new({}, stream_chunks) }
+  let(:messages) { [{role: "user", content: "hello"}] }
+
+  it "posts to /v1/chat/completions with stream enabled and the messages" do
+    ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages).result
+    assert_equal("/v1/chat/completions", transport.requested_path)
+    assert_equal(messages, transport.requested_body[:messages])
+    assert_equal(true, transport.requested_body[:stream])
+  end
+
+  it "yields ChatCompletionChunk events and returns the assembled ChatCompletion (block form)" do
+    deltas = []
+    completion = ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages) do |event|
+      assert_instance_of(::HermesAgent::Client::Entities::ChatCompletionChunk, event)
+      deltas << event.delta
+    end
+    assert_equal([nil, "Hello", " world"], deltas)
+    assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
+    assert_equal("Hello world", completion.choices.first.message.content)
+    assert_equal(3, completion.usage.total_tokens)
+  end
+
+  it "returns a Stream the caller can iterate (enumerator form)" do
+    stream = ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages)
+    assert_instance_of(::HermesAgent::Client::Stream, stream)
+    text = stream.each.filter_map(&:delta).join
+    assert_equal("Hello world", text)
+    assert_equal("Hello world", stream.result.choices.first.message.content)
+  end
+end
+
 describe "chat" do
   integration_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
 
@@ -162,6 +302,18 @@ describe "chat" do
       choice = completion.choices.first
       assert_equal("assistant", choice.message.role)
       refute_empty(choice.message.content)
+    end
+
+    it "streams a chat turn against the live gateway" do
+      deltas = []
+      completion = client.chat.stream_create(messages: [{role: "user", content: "Count: one two three"}]) do |event|
+        assert_instance_of(::HermesAgent::Client::Entities::ChatCompletionChunk, event)
+        deltas << event.delta
+      end
+      assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
+      streamed_text = deltas.compact.join
+      refute_empty(streamed_text)
+      assert_equal(streamed_text, completion.choices.first.message.content)
     end
   end
 end

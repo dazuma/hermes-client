@@ -54,6 +54,27 @@ module HermesAgent
         handle(response)
       end
 
+      ##
+      # Open a streaming POST and return its live response body for an SSE
+      # consumer ({Stream}). The response status is checked up front, so an
+      # error response raises before any streaming begins; on success the body
+      # is returned unread so it can be consumed incrementally.
+      #
+      # @param path [String] The request path, including its prefix.
+      # @param body [Hash] The request body, serialized to JSON.
+      # @return [HTTP::Response::Body] The live response body; iterate it with
+      #     `#each` to read byte chunks as they arrive.
+      # @raise [APIError] If the server returns a non-2xx response.
+      #
+      def stream_post(path, body)
+        response = request { client.post(url_for(path), json: body) }
+        unless response.status.success?
+          raise APIError.from_response(status: response.code, body: response.body.to_s,
+                                       headers: response.headers.to_h)
+        end
+        response.body
+      end
+
       private
 
       ##

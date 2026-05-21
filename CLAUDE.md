@@ -38,7 +38,7 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 
 - **Red-Green TDD:** In most cases, use Red-Green TDD for development. For each development step, write a failing test first, then write code to get the tests to pass, then commit before moving on to the next step.
 - **Name vs. namespace mismatch (intentional):** the gem is `hermes-client`, the require entry point is `lib/hermes-client.rb`, but the code lives under the `HermesAgent::Client` module (require path `hermes_agent/client`). `lib/hermes-client.rb` just requires `hermes_agent/client`. Keep new files under `lib/hermes_agent/client/`.
-- **Dependencies:** the client is built on the [`http`](https://github.com/httprb/http) gem (`~> 6.0`) for HTTP requests and [`ld-eventsource`](https://github.com/launchdarkly/ruby-eventsource) (`~> 2.6`) for consuming the Server-Sent Event streams the API emits.
+- **Dependencies:** the client is built on the [`http`](https://github.com/httprb/http) gem (`~> 6.0`) for HTTP requests. Server-Sent Event streams are parsed in-house (`HermesAgent::Client::Stream`) over the same `http` connection, so there is no separate SSE dependency.
 - **Ruby support:** `required_ruby_version >= 3.4`. All files use `# frozen_string_literal: true`.
 - **Docs as a gate:** because `toys yardoc` fails on undocumented objects, document public API as you add it.
 - **Commit messages:** Use Conventional Commits prefixes. Use `chore:` for changes that are not shipped in the packaged gem (e.g. `devdocs/`, tooling, CI), and reserve `feat:`/`fix:`/etc. for changes to the gem's user-visible code.
@@ -129,4 +129,4 @@ Key facts the client must accommodate:
   - `POST /v1/responses` — Responses API with server-side conversation persistence; chain turns via `previous_response_id` or a named `conversation`.
   - `POST /v1/runs` — long-form streaming runs; returns a `run_id` for progress tracking.
   - `GET /v1/models`, `GET /v1/capabilities` — discovery (advertised models, feature support).
-- **Streaming:** responses stream as SSE. Chat completions emit custom `hermes.tool.progress` events for tool execution; the Responses API uses OpenAI-style event types (`function_call`, `function_call_output`, etc.). This is why `ld-eventsource` is a dependency.
+- **Streaming:** responses stream as SSE, parsed in-house by `Client::Stream` over the `http` connection. Chat completions emit custom `hermes.tool.progress` events for tool execution; the Responses API uses OpenAI-style event types (`function_call`, `function_call_output`, etc.).

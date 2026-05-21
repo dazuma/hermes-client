@@ -23,7 +23,6 @@ require "hermes_agent/client/version"
   spec.require_paths = ["lib"]
 
   spec.add_dependency "http", "~> 6.0"
-  spec.add_dependency "ld-eventsource", "~> 2.6"
   spec.required_ruby_version = ">= 3.4"
 
   spec.metadata["bug_tracker_uri"] = "https://github.com/dazuma/hermes-client/issues"
