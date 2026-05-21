@@ -14,6 +14,47 @@ describe ::HermesAgent::Client::Entities::Health do
   end
 end
 
+describe ::HermesAgent::Client::Entities::HealthDetails do
+  detailed = {
+    "status" => "ok",
+    "platform" => "hermes-agent",
+    "gateway_state" => "running",
+    "platforms" => {"api_server" => {"state" => "connected"}},
+    "active_agents" => 2,
+    "exit_reason" => nil,
+    "updated_at" => "2026-05-21T21:13:33.042909+00:00",
+    "pid" => 38_293,
+  }
+
+  it "is independent of the Health entity" do
+    refute_operator(::HermesAgent::Client::Entities::HealthDetails, :<,
+                    ::HermesAgent::Client::Entities::Health)
+  end
+
+  it "reads every detailed field" do
+    health = ::HermesAgent::Client::Entities::HealthDetails.new(detailed)
+    assert_equal("ok", health.status)
+    assert_equal("hermes-agent", health.platform)
+    assert_equal("running", health.gateway_state)
+    assert_equal({"api_server" => {"state" => "connected"}}, health.platforms)
+    assert_equal(2, health.active_agents)
+    assert_nil(health.exit_reason)
+    assert_equal("2026-05-21T21:13:33.042909+00:00", health.updated_at)
+    assert_equal(38_293, health.pid)
+  end
+
+  it "returns nil for detailed fields when absent" do
+    health = ::HermesAgent::Client::Entities::HealthDetails.new({})
+    assert_nil(health.status)
+    assert_nil(health.platform)
+    assert_nil(health.gateway_state)
+    assert_nil(health.platforms)
+    assert_nil(health.active_agents)
+    assert_nil(health.updated_at)
+    assert_nil(health.pid)
+  end
+end
+
 describe ::HermesAgent::Client::Resources::Health do
   let(:transport) { ::HermesAgent::Tests::FakeTransport.new({"status" => "ok"}) }
 
@@ -26,6 +67,16 @@ describe ::HermesAgent::Client::Resources::Health do
     health = ::HermesAgent::Client::Resources::Health.new(transport).check
     assert_instance_of(::HermesAgent::Client::Entities::Health, health)
     assert_equal("ok", health.status)
+  end
+
+  it "fetches the /health/detailed path" do
+    ::HermesAgent::Client::Resources::Health.new(transport).detailed
+    assert_equal("/health/detailed", transport.requested_path)
+  end
+
+  it "wraps the detailed response in a HealthDetails entity" do
+    health = ::HermesAgent::Client::Resources::Health.new(transport).detailed
+    assert_instance_of(::HermesAgent::Client::Entities::HealthDetails, health)
   end
 end
 
@@ -45,6 +96,13 @@ describe "health" do
     it "exposes the raw payload via to_h" do
       health = client.health.check
       assert_equal("ok", health.to_h["status"])
+    end
+
+    it "reports detailed status from the live gateway" do
+      health = client.health.detailed
+      assert_equal("ok", health.status)
+      refute_nil(health.gateway_state)
+      assert_kind_of(::Integer, health.active_agents)
     end
   end
 end

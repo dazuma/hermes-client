@@ -344,9 +344,18 @@ id, object: "model", created, owned_by, permission, root, parent } ] }`.
 
 ```ruby
 client.health.check     # GET /health           => Health  (#status == "ok")
-client.health.detailed  # GET /health/detailed   => detailed Health (sessions,
-                        #   running agents, resource usage)
+client.health.detailed  # GET /health/detailed   => HealthDetails
 ```
+
+Observed (probing `hermes-test`): `/health/detailed` is a **superset** of
+`/health` — same `status` and `platform`, plus `gateway_state` (e.g.
+`"running"`), `platforms` (a map keyed by platform name, e.g. `api_server`,
+each `{ state, error_code, error_message, updated_at }`), `active_agents` (an
+integer count), `exit_reason` (nullable), and incidental `updated_at` / `pid`.
+(The earlier guess of "sessions / resource usage" was not borne out.)
+`HealthDetails` is an independent `Entity` (not a `Health` subclass) with a
+reader for every observed field: `status`, `platform`, `gateway_state`,
+`platforms`, `active_agents`, `exit_reason`, `updated_at`, and `pid`.
 
 ## Internal layering
 

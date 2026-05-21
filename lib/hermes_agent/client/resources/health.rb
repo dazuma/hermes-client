@@ -32,6 +32,16 @@ module HermesAgent
         def check
           Entities::Health.new(@transport.get("/health"))
         end
+
+        ##
+        # Fetch detailed server health, including gateway state, per-platform
+        # connection status, and the active-agent count.
+        #
+        # @return [Entities::HealthDetails] The detailed health result.
+        #
+        def detailed
+          Entities::HealthDetails.new(@transport.get("/health/detailed"))
+        end
       end
     end
   end
