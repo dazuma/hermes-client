@@ -48,6 +48,76 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 - Tests use Minitest spec-style `describe` and `it` blocks, with traditional assertions, e.g. `assert_equal`, instead of `must`/`wont` expectations.
 - Tests that need to hit a real Hermes gateway should be guarded behind a check whether the environment variable `HERMES_CLIENT_INTEGRATION_PORT` is set. Such tests can use the value of that variable as the port number of the gateway. This variable will be set by the Toys test tool when `--integration-port=<PORT NUMBER>` and `--integration-profile=hermes-test` are passed to `toys test`.
 
+## Exploring real server behavior (`toys gateway`)
+
+The published API docs are thin on request/response field details and SSE event
+shapes, so `devdocs/DESIGN.md`'s field lists are best-effort. The `toys gateway`
+tools exist to resolve those gaps empirically: they spin up a local gateway and
+hit its endpoints with **raw HTTP**, printing prettified JSON (and raw SSE
+frames). They deliberately **bypass the client library** so you see the server's
+unvarnished wire format — not whatever the entity wrappers would surface. Use
+them to answer "what does the server actually return?", then fold durable
+findings into `devdocs/DESIGN.md` (marked as observed/best-effort).
+
+**Prerequisite:** the `hermes` CLI must be installed and a `hermes-test` profile
+must exist (`hermes profile list` to check) — the same profile the integration
+tests use. Defaults: profile `hermes-test`, port `10099`.
+
+**Lifecycle (start once, probe many times):**
+
+- `toys gateway start [--profile=hermes-test] [--port=10099] [--key=KEY]` —
+  spawns `hermes -p <profile> gateway run` as a **detached background process**,
+  polls `/health`, and records `{pid, port, profile, base_url, key}` in the
+  gitignored `tmp/gateway-state.json`. The server key resolves from `--key`,
+  else `$API_SERVER_KEY`, else a freshly generated one — whatever is used is
+  recorded so probes authenticate automatically. Gateway stdout/stderr is
+  captured to `tmp/gateway.log`.
+- `toys gateway status` — report whether it is running (and where).
+- `toys gateway stop` — SIGINT the process and clear the state file.
+
+Run lifetime spans separate tool invocations (state lives in the file, not the
+process), so you can `start` once and probe repeatedly — important for the
+**server-side-stateful** endpoints (chain Responses turns, poll a `run_id`).
+
+**Probing:**
+
+- `toys gateway probe <METHOD> <PATH> [--body=JSON] [--stream] [--token=TOKEN]` —
+  the generic escape hatch. Bearer token defaults to the recorded key.
+- Shortcuts: `toys gateway models`, `capabilities`, `health [--detailed]`,
+  `chat "<text>" [--stream]`,
+  `respond "<text>" [--previous=ID] [--conversation=NAME] [--stream]`.
+
+**Output:** the prettified JSON body goes to **stdout**; the `HTTP <status>` line
+goes to **stderr**, so `toys gateway probe GET /v1/models > out.json` captures
+clean JSON. With `--stream`, the response is read as SSE and rendered
+frame-by-frame: the `event:` name when present, then each data payload
+prettified as JSON (raw fallback for non-JSON data like the `[DONE]` sentinel).
+Add `--stream` *and* set `"stream": true` in the body for a raw `probe`; the
+`chat`/`respond` shortcuts set the body flag for you when given `--stream`.
+
+**Example flow:**
+
+```sh
+toys gateway start
+toys gateway capabilities                       # advertised endpoints + feature matrix
+toys gateway probe POST /v1/responses --body '{"input":"hello"}'
+toys gateway respond "hello" --stream           # see the named SSE event sequence
+toys gateway stop
+```
+
+**Notes / gotchas:**
+
+- `hermes-test` runs a **real model** (e.g. `gemini-flash-lite`), so
+  `chat`/`respond`/`runs` make real LLM calls (latency, cost, network).
+  Discovery (`models`, `capabilities`, `health`) is cheap and offline-friendly.
+- The default port `10099` is also what `toys test --integration-port=10099`
+  uses; stop a probe gateway (or pick another `--port`) before running
+  integration tests so they don't collide on the port.
+- Implementation lives in `.toys/gateway/` with shared logic in
+  `.toys/gateway/.lib/hermes_gateway.rb`. The `.toys/` tree is **not** covered by
+  rubocop or yardoc, so it is exempt from the lint/docs gates. `tmp/` is
+  gitignored. These tools are not shipped in the gem (commit them as `chore:`).
+
 ## Target API: Hermes API Server
 
 This client wraps the [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server).
