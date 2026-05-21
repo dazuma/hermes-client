@@ -414,3 +414,20 @@ running server; several below have been refined that way already.
 - Whether a convenience helper for `conversation` chaining is worth adding.
 - Retry/backoff policy (none planned for v1 unless the server signals retryable
   conditions).
+
+Known limitations in the current streaming implementation (deferred, revisit):
+
+- **Chat stream aggregation assumes a single choice.**
+  `ChatCompletion.from_chunks` reconstructs only `choices[0]` (it concatenates
+  every chunk's `delta.content` into one message). A multi-choice stream
+  (`n > 1`) would need the chunks grouped by `choices[].index` before
+  assembling one message per choice. Not yet handled — confirm whether the
+  server ever emits `n > 1` and, if so, generalize the aggregator.
+- **Mid-stream read errors are not mapped to the `Error` hierarchy.**
+  `Transport#stream_post` checks the response status up front, so an error
+  *opening* the stream raises the right `APIError` subclass before any events
+  are yielded. But a socket/timeout failure that occurs *during* iteration
+  (inside `Stream#each`, while reading the live body) currently propagates the
+  raw `http`-gem exception rather than a `ConnectionError`/`TimeoutError`.
+  Decide on the desired behavior (wrap mid-stream failures, signal a partial
+  result, etc.) and handle it in `Stream`.
