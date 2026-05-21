@@ -53,9 +53,10 @@ lib/hermes_agent/client/
 - Because the field set is not fully known, each request method also accepts an
   open `**extra` (merged into the request body) so callers can pass fields we
   have not yet modeled without waiting on a gem release.
-- `model:` is optional everywhere. The server treats it as cosmetic (the actual
-  LLM is configured server-side); when omitted we send nothing and let the
-  server default to the profile name.
+- `model:` is **omitted altogether**. The server ignores it — the actual LLM is
+  configured server-side — so the client does not expose a `model:` parameter
+  and never sends a `model` field. (Callers who really want to send one can
+  still pass it through `**extra`.)
 
 ### Return values
 
@@ -105,8 +106,17 @@ HermesAgent::Client::Error                 (base; rescue this to catch all)
 
 ### Streaming
 
-Any method that can stream accepts `stream: true` and follows a
-**block-or-enumerator** pattern, implemented once in `Stream`:
+Streaming is exposed through **separate methods**, not a `stream:` flag. Any
+method that streams is named with a `stream_` prefix — both streaming
+counterparts of a non-streaming verb (`create` → `stream_create`) and
+inherently streaming endpoints with no non-streaming sibling
+(`runs.stream_events`). The prefix is a general marker that a method returns a
+stream, which keeps every method's return type unambiguous from its name:
+non-streaming methods always return a result object, streaming methods always
+return/yield a stream.
+
+The streaming methods follow a **block-or-enumerator** pattern, implemented once
+in `Stream`:
 
 - With a block, it yields each parsed event as it arrives (natural backpressure)
   and returns the final aggregated object when the stream closes.
@@ -116,12 +126,12 @@ Any method that can stream accepts `stream: true` and follows a
 
 ```ruby
 # block form
-client.chat.create(messages: msgs, stream: true) do |event|
+client.chat.stream_create(messages: msgs) do |event|
   print event.delta
 end
 
 # enumerator form
-stream = client.chat.create(messages: msgs, stream: true)
+stream = client.chat.stream_create(messages: msgs)
 stream.each { |event| print event.delta }
 ```
 
@@ -167,8 +177,9 @@ present on every request method.
 ### `client.chat` — Chat Completions (`POST /v1/chat/completions`, stateless)
 
 ```ruby
-client.chat.create(messages:, model: nil, stream: false, &block)
-  # => ChatCompletion, or streams ChatCompletionChunk / ToolProgress events
+client.chat.create(messages:)                 # => ChatCompletion
+client.chat.stream_create(messages:, &block)  # streams ChatCompletionChunk /
+                                              #   ToolProgress events
 ```
 
 - `messages` is the OpenAI-style array; content may include `image_url` parts
@@ -178,10 +189,12 @@ client.chat.create(messages:, model: nil, stream: false, &block)
 ### `client.responses` — Responses API (`/v1/responses`, server-side state)
 
 ```ruby
-client.responses.create(input:, model: nil,
+client.responses.create(input:,
                         previous_response_id: nil,  # chain a prior turn
-                        conversation: nil,           # named conversation
-                        stream: false, &block)       # => Response
+                        conversation: nil)           # named conversation
+                                                     #   => Response
+client.responses.stream_create(input:, previous_response_id: nil,
+                              conversation: nil, &block)  # streams Response events
 client.responses.get(id)      # GET    /v1/responses/{id}  => Response
 client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 ```
@@ -197,12 +210,12 @@ client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 ```ruby
 client.runs.create(...)            # POST /v1/runs              => Run (has #id / run_id)
 client.runs.get(run_id)            # GET  /v1/runs/{id}         => Run (poll state)
-client.runs.events(run_id, &block) # GET  /v1/runs/{id}/events  => SSE stream
+client.runs.stream_events(run_id, &block) # GET /v1/runs/{id}/events => SSE stream
 client.runs.stop(run_id)           # POST /v1/runs/{id}/stop    => Run/result
 ```
 
-- `events` uses the same block-or-enumerator streaming pattern over the SSE
-  endpoint, yielding run-progress events.
+- `stream_events` uses the same block-or-enumerator streaming pattern over the
+  SSE endpoint, yielding run-progress events.
 
 ### `client.jobs` — Jobs API (scheduled background work, under `/api/jobs`)
 
