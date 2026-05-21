@@ -23,6 +23,45 @@ module HermesAgent
       end
 
       ##
+      # The connection status of a single platform within a detailed health
+      # check (one entry of {HealthDetails#platforms}).
+      #
+      class PlatformStatus < Entity
+        ##
+        # The connection state, e.g. `"connected"`.
+        # @return [String, nil]
+        #
+        def state
+          self["state"]
+        end
+
+        ##
+        # A machine-readable error code, or `nil` when there is no error.
+        # @return [String, nil]
+        #
+        def error_code
+          self["error_code"]
+        end
+
+        ##
+        # A human-readable error message, or `nil` when there is no error.
+        # @return [String, nil]
+        #
+        def error_message
+          self["error_message"]
+        end
+
+        ##
+        # When this platform status was last updated (ISO-8601 timestamp
+        # string).
+        # @return [String, nil]
+        #
+        def updated_at
+          self["updated_at"]
+        end
+      end
+
+      ##
       # The result of a detailed server health check (`/health/detailed`).
       # Field readers are best-effort; {#to_h} remains the source of truth.
       #
@@ -53,12 +92,15 @@ module HermesAgent
 
         ##
         # The per-platform connection state, keyed by platform name (e.g.
-        # `"api_server"`), each value a hash with `state` and optional error
-        # detail.
-        # @return [Hash, nil]
+        # `"api_server"`), each value wrapped in a {PlatformStatus}. Returns
+        # `nil` when the field is absent.
+        # @return [Hash{String => PlatformStatus}, nil]
         #
         def platforms
-          self["platforms"]
+          raw = self["platforms"]
+          return nil unless raw.is_a?(::Hash)
+
+          raw.transform_values { |value| PlatformStatus.new(value) }
         end
 
         ##

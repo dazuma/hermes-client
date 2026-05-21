@@ -355,7 +355,10 @@ integer count), `exit_reason` (nullable), and incidental `updated_at` / `pid`.
 (The earlier guess of "sessions / resource usage" was not borne out.)
 `HealthDetails` is an independent `Entity` (not a `Health` subclass) with a
 reader for every observed field: `status`, `platform`, `gateway_state`,
-`platforms`, `active_agents`, `exit_reason`, `updated_at`, and `pid`.
+`platforms`, `active_agents`, `exit_reason`, `updated_at`, and `pid`. The
+`platforms` reader returns a `Hash` keyed by platform name whose values are
+`PlatformStatus` entities (`state`, `error_code`, `error_message`,
+`updated_at`) rather than raw hashes.
 
 ## Internal layering
 
