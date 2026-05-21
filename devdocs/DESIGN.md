@@ -104,6 +104,40 @@ HermesAgent::Client::Error                 (base; rescue this to catch all)
 `APIError` carries `#status`, `#headers`, `#body` (raw) and a parsed
 `#error` hash when the server returns a structured error.
 
+#### Observed error response shape
+
+Probed against the `hermes-test` profile (`toys gateway probe` with bad
+tokens / malformed bodies / bad paths). There are **two distinct error
+families**, and the client must tolerate both:
+
+- **Application-level errors** (auth failure, body validation, missing
+  resource) return **OpenAI-style JSON**: `{ "error": { "message", "type",
+  "param"?, "code"? } }`. Examples observed:
+  - `401` bad/empty token → `{message: "Invalid API key", type:
+    "invalid_request_error", code: "invalid_api_key"}`
+  - `400` empty `/v1/responses` body → `{message: "Missing 'input' field",
+    type: "invalid_request_error", param: null, code: null}`
+  - `400` wrong `input` type → `{message: "'input' must be a string or
+    array", ...}`; `400` malformed JSON → `{message: "Invalid JSON in request
+    body", type: "invalid_request_error"}` (no `param`/`code` keys at all)
+  - `400` empty `/v1/chat/completions` body → `{message: "Missing or invalid
+    'messages' field", type: "invalid_request_error"}`
+  - `404` on a real route with a bad id (`GET /v1/responses/{bad}`) →
+    `{message: "Response not found: ...", type: "invalid_request_error"}`
+- **Framework/router-level errors** return **bare text, not JSON**:
+  - `404` on an unrouted path → `404: Not Found`
+  - `405` wrong method on a real route → `405: Method Not Allowed`
+
+Implications for the implementation:
+- `APIError#error` parsing must **not assume JSON** — the router-level 404/405
+  bodies are plain text, so parse defensively and fall back to `#body`.
+- Within the structured family the field set is **inconsistent**: `message`
+  and `type` are always present, but `param` and `code` may be `null` or
+  omitted entirely. Treat them as best-effort readers.
+- `type` is **not** a reliable discriminator — it was `invalid_request_error`
+  for every case including `401`. Map HTTP **status** to the error subclass
+  (as the hierarchy already does); do not key off `type`/`code`.
+
 ### Streaming
 
 Streaming is exposed through **separate methods**, not a `stream:` flag. Any
@@ -332,7 +366,10 @@ running server; several below have been refined that way already.
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
   arrays. (`models` was observed returning a full `{ object: "list", data }`
   with no pagination fields.)
-- Structured error response shape (for `APIError#error`).
+- ~~Structured error response shape (for `APIError#error`).~~ Captured above:
+  two families (OpenAI-style `{error: {...}}` for app-level errors, bare text
+  for router-level 404/405). Remaining unknown: the `>= 500` ServerError body
+  shape (hard to provoke safely on a live server).
 - Final name of the client-side API-key environment variable.
 - Whether a convenience helper for `conversation` chaining is worth adding.
 - Retry/backoff policy (none planned for v1 unless the server signals retryable
