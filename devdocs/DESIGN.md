@@ -186,13 +186,28 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
   `hermes.tool.progress` events were not seen in a plain text completion and
   still need to be captured during actual tool execution.)
 - **Responses API** streams **named** events; each `data:` payload repeats the
-  name in a `type` field and carries a monotonic `sequence_number`. Observed
-  order for a simple text turn: `response.created` →
-  `response.output_item.added` → `response.output_text.delta` (one per delta) →
-  `response.output_text.done` → `response.output_item.done` (the terminal
-  `response.completed`/`response.done` event has not yet been captured).
-  `response.created` carries the `response.id` (`resp_…`) used for
-  `previous_response_id` chaining.
+  name in a `type` field and carries a monotonic `sequence_number` (0-based).
+  Full observed order for a simple text turn: `response.created` (seq 0) →
+  `response.output_item.added` (seq 1) → `response.output_text.delta` (seq 2,
+  one per delta) → `response.output_text.done` (seq 3) →
+  `response.output_item.done` (seq 4) → **`response.completed`** (seq 5, the
+  terminal event). There is no `response.done` and **no `[DONE]` sentinel** —
+  the stream simply ends after `response.completed` (unlike chat completions,
+  which do terminate with `data: [DONE]`).
+  - `response.created` carries the `response.id` (`resp_…`) used for
+    `previous_response_id` chaining, plus `status: "in_progress"`, `model`,
+    `created_at`, and an empty `output: []`.
+  - The delta events thread an `item_id` (`msg_…`), `output_index`, and
+    `content_index`; `response.output_text.delta` carries the incremental
+    `delta` string while `response.output_text.done` carries the assembled
+    `text`.
+  - **`response.completed` carries the full final `response` object** —
+    `status: "completed"`, the complete `output` array (message items with
+    `content: [{type: "output_text", text}]`), and a `usage` block using
+    Responses-API field names `{ input_tokens, output_tokens, total_tokens }`
+    (note: *not* chat's `prompt_tokens`/`completion_tokens`). The `Stream`
+    aggregator can therefore take the final `Response` straight from this
+    event rather than reconstructing it from deltas.
 
 ## Client construction and configuration
 
@@ -360,9 +375,10 @@ running server; several below have been refined that way already.
   chat completions, and the Responses API are partially mapped (see above);
   `runs` and `jobs` request/response bodies are still largely unknown.
 - The full set of SSE event types and payloads. Chat-completion chunks and the
-  Responses API event sequence are now captured (above); still outstanding are
-  the custom `hermes.tool.progress` shape (needs a tool-executing run), the run
-  events stream, and the terminal Responses event.
+  full Responses API event sequence — including the terminal
+  `response.completed` — are now captured (above); still outstanding are the
+  custom `hermes.tool.progress` shape (needs a tool-executing run) and the run
+  events stream.
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
   arrays. (`models` was observed returning a full `{ object: "list", data }`
   with no pagination fields.)
