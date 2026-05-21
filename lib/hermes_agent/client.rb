@@ -8,6 +8,7 @@ require "hermes_agent/client/configuration"
 require "hermes_agent/client/errors"
 require "hermes_agent/client/transport"
 require "hermes_agent/client/resources/capabilities"
+require "hermes_agent/client/resources/chat"
 require "hermes_agent/client/resources/health"
 require "hermes_agent/client/resources/models"
 
@@ -61,6 +62,14 @@ module HermesAgent
     #
     def capabilities
       @capabilities ||= Resources::Capabilities.new(@transport)
+    end
+
+    ##
+    # The chat resource (OpenAI-compatible chat completions).
+    # @return [Resources::Chat]
+    #
+    def chat
+      @chat ||= Resources::Chat.new(@transport)
     end
 
     ##

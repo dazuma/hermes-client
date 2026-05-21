@@ -13,8 +13,8 @@ module HermesAgent
     # delegate here.
     #
     # Only the subset needed by the currently implemented resources is present;
-    # more verbs (`post`, `patch`, `delete`) and richer error mapping will be
-    # added as further endpoints are built out.
+    # more verbs (`patch`, `delete`) and richer error mapping will be added as
+    # further endpoints are built out.
     #
     class Transport
       ##
@@ -36,6 +36,21 @@ module HermesAgent
       #
       def get(path)
         response = request { client.get(url_for(path)) }
+        handle(response)
+      end
+
+      ##
+      # Issue a POST request with a JSON body and return the parsed JSON body.
+      #
+      # @param path [String] The request path, including any prefix such as
+      #     `/v1` (resources own their prefixes).
+      # @param body [Hash] The request body, serialized to JSON. The
+      #     `Content-Type: application/json` header is set automatically.
+      # @return [Hash] The parsed response body, with string keys.
+      # @raise [APIError] If the server returns a non-2xx response.
+      #
+      def post(path, body)
+        response = request { client.post(url_for(path), json: body) }
         handle(response)
       end
 

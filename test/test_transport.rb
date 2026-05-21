@@ -50,6 +50,32 @@ describe ::HermesAgent::Client::Transport do
     end
   end
 
+  it "posts a JSON body and parses the JSON response" do
+    stub = stub_request(:post, "https://example.test/v1/chat/completions")
+           .with(headers: {"Content-Type" => %r{application/json}}, body: '{"messages":[]}')
+           .to_return(status: 200, body: '{"object":"chat.completion"}')
+    result = transport(base_url: "https://example.test").post("/v1/chat/completions", {messages: []})
+    assert_equal({"object" => "chat.completion"}, result)
+    assert_requested(stub)
+  end
+
+  it "sends the bearer Authorization header on a post" do
+    stub = stub_request(:post, "https://example.test/v1/chat/completions")
+           .with(headers: {"Authorization" => "Bearer secret"})
+           .to_return(status: 200, body: "{}")
+    transport(base_url: "https://example.test", api_key: "secret").post("/v1/chat/completions", {messages: []})
+    assert_requested(stub)
+  end
+
+  it "maps a post error response to the status-mapped APIError" do
+    body = '{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"invalid_api_key"}}'
+    stub_request(:post, "https://example.test/v1/chat/completions").to_return(status: 401, body: body)
+    error = assert_raises(::HermesAgent::Client::AuthenticationError) do
+      transport(base_url: "https://example.test").post("/v1/chat/completions", {messages: []})
+    end
+    assert_equal("Invalid API key", error.message)
+  end
+
   it "joins base_url and path without a doubled slash" do
     stub = stub_request(:get, "https://example.test/health").to_return(status: 200, body: "{}")
     transport(base_url: "https://example.test/").get("/health")
