@@ -326,9 +326,12 @@ Observed (probing the `hermes-test` profile via `toys gateway`; refine as we
 see more), `GET /v1/capabilities` returns an object with
 `object: "hermes.api_server.capabilities"` and these top-level keys:
 
+- `platform` — the platform identifier, e.g. `"hermes-agent"`.
+- `model` — the configured server-side model id, e.g. `"hermes-test"`.
 - `auth` — `{ "type": "bearer", "required": true }`.
 - `runtime` — the execution model, e.g. `mode: "server_agent"`,
-  `tool_execution: "server"`, `split_runtime: false`.
+  `tool_execution: "server"`, `split_runtime: false`, plus a human-readable
+  `description` string.
 - `features` — a boolean matrix: `chat_completions`/`chat_completions_streaming`,
   `responses_api`/`responses_streaming`, `run_submission`, `run_status`,
   `run_events_sse`, `run_stop`, `run_approval_response`, `tool_progress_events`,

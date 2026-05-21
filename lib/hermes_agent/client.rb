@@ -7,6 +7,7 @@ require "hermes_agent/client/version"
 require "hermes_agent/client/configuration"
 require "hermes_agent/client/errors"
 require "hermes_agent/client/transport"
+require "hermes_agent/client/resources/capabilities"
 require "hermes_agent/client/resources/health"
 
 ##
@@ -51,6 +52,15 @@ module HermesAgent
     # @return [Configuration]
     #
     attr_reader :config
+
+    ##
+    # The capabilities resource (the server's advertised endpoints and
+    # feature matrix).
+    # @return [Resources::Capabilities]
+    #
+    def capabilities
+      @capabilities ||= Resources::Capabilities.new(@transport)
+    end
 
     ##
     # The health resource (server health checks).
