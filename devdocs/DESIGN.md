@@ -139,6 +139,27 @@ Events are wrapper objects too. Chat streaming surfaces the server's custom
 `hermes.tool.progress` events as a distinct event type (separate from text
 deltas) so tool activity does not pollute assistant text.
 
+### Observed streaming event types
+
+Captured by probing the `hermes-test` profile (`toys gateway chat/respond
+--stream`); refine as we see more cases:
+
+- **Chat completions** stream OpenAI-style: **unnamed** SSE frames (no `event:`
+  line) whose `data:` is a `chat.completion.chunk` object. The first chunk
+  carries `delta.role`, subsequent chunks carry `delta.content`, and the final
+  chunk has an empty `delta`, `finish_reason: "stop"`, and a `usage` block. The
+  stream terminates with a literal `data: [DONE]` sentinel. (The custom
+  `hermes.tool.progress` events were not seen in a plain text completion and
+  still need to be captured during actual tool execution.)
+- **Responses API** streams **named** events; each `data:` payload repeats the
+  name in a `type` field and carries a monotonic `sequence_number`. Observed
+  order for a simple text turn: `response.created` →
+  `response.output_item.added` → `response.output_text.delta` (one per delta) →
+  `response.output_text.done` → `response.output_item.done` (the terminal
+  `response.completed`/`response.done` event has not yet been captured).
+  `response.created` carries the `response.id` (`resp_…`) used for
+  `previous_response_id` chaining.
+
 ## Client construction and configuration
 
 ```ruby
@@ -167,6 +188,10 @@ Notes:
   the server's own `API_SERVER_KEY`). *(Env var name: decision to confirm.)*
 - Mutating requests accept an optional `idempotency_key:` sent as the
   `Idempotency-Key` header (server dedupes within ~5 minutes).
+- The server advertises **session-continuity headers** in `/v1/capabilities`:
+  `X-Hermes-Session-Id` (`session_continuity_header`) and `X-Hermes-Session-Key`
+  (`session_key_header`). These appear to be the mechanism for carrying
+  continuity on the otherwise-stateless chat endpoint; exact usage to confirm.
 
 ## Resource API
 
@@ -216,6 +241,11 @@ client.runs.stop(run_id)           # POST /v1/runs/{id}/stop    => Run/result
 
 - `stream_events` uses the same block-or-enumerator streaming pattern over the
   SSE endpoint, yielding run-progress events.
+- `/v1/capabilities` advertises these run routes: `POST /v1/runs`,
+  `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/events`,
+  `POST /v1/runs/{run_id}/stop`, and additionally
+  `POST /v1/runs/{run_id}/approval` (paired with an `approval_events` feature) —
+  a human-in-the-loop approval flow we have not yet modeled.
 
 ### `client.jobs` — Jobs API (scheduled background work, under `/api/jobs`)
 
@@ -231,6 +261,9 @@ client.jobs.run(job_id)           # POST   /api/jobs/{id}/run      (run now)
 ```
 
 - Note these live under `/api/jobs`, not `/v1` — `Jobs` carries its own prefix.
+- The Jobs endpoints were **not** present in the `hermes-test`
+  `/v1/capabilities` advertisement, so they may be gated, versioned separately,
+  or absent in some builds — confirm against a server that exposes them.
 
 ### `client.models` / `client.capabilities` — discovery (`/v1`)
 
@@ -239,6 +272,24 @@ client.models.list      # GET /v1/models        => [Model]
 client.capabilities.get # GET /v1/capabilities   => Capabilities
                         #   (chat_completions, responses_api, run_submission, ...)
 ```
+
+Observed (probing the `hermes-test` profile via `toys gateway`; refine as we
+see more), `GET /v1/capabilities` returns an object with
+`object: "hermes.api_server.capabilities"` and these top-level keys:
+
+- `auth` — `{ "type": "bearer", "required": true }`.
+- `runtime` — the execution model, e.g. `mode: "server_agent"`,
+  `tool_execution: "server"`, `split_runtime: false`.
+- `features` — a boolean matrix: `chat_completions`/`chat_completions_streaming`,
+  `responses_api`/`responses_streaming`, `run_submission`, `run_status`,
+  `run_events_sse`, `run_stop`, `run_approval_response`, `tool_progress_events`,
+  `approval_events`, `cors`, plus the session-header names (see below).
+- `endpoints` — a map of logical name → `{ method, path }`: the server's own
+  advertisement of its routes (see the `runs`/jobs notes above).
+
+`GET /v1/models` returns the OpenAI list shape: `{ object: "list", data: [ {
+id, object: "model", created, owned_by, permission, root, parent } ] }`.
+`GET /health` returns `{ "status": "ok", "platform": "hermes-agent" }`.
 
 ### `client.health` — health (root paths, no `/v1`)
 
@@ -266,14 +317,21 @@ resource classes trivial to add as we map more of the API.
 
 ## Open questions / to confirm
 
-These need additional docs or experimentation against a live server:
+These need additional docs or experimentation against a live server. The
+`toys gateway` tools (start a local gateway, then probe endpoints and dump
+prettified JSON / raw SSE frames) are the means to resolve these against a
+running server; several below have been refined that way already.
 
-- Exact request bodies and response field names for each endpoint (especially
-  `runs` and `jobs`, which the published docs barely detail).
-- The full set of SSE event types and payloads for chat streaming and run
-  events, including the shape of `hermes.tool.progress`.
+- Exact request bodies and response field names for each endpoint. Discovery,
+  chat completions, and the Responses API are partially mapped (see above);
+  `runs` and `jobs` request/response bodies are still largely unknown.
+- The full set of SSE event types and payloads. Chat-completion chunks and the
+  Responses API event sequence are now captured (above); still outstanding are
+  the custom `hermes.tool.progress` shape (needs a tool-executing run), the run
+  events stream, and the terminal Responses event.
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
-  arrays.
+  arrays. (`models` was observed returning a full `{ object: "list", data }`
+  with no pagination fields.)
 - Structured error response shape (for `APIError#error`).
 - Final name of the client-side API-key environment variable.
 - Whether a convenience helper for `conversation` chaining is worth adding.
