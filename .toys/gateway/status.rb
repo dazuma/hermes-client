@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
+include "gateway_helpers"
+
 desc "Show whether the local Hermes test gateway is running"
 
 def run
-  require "hermes_gateway"
   state = HermesGateway.read_state(context_directory)
   if state.nil?
     puts("No gateway state recorded; not running.")

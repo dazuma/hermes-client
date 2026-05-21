@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 include :bundler
+include "gateway_helpers"
 
 desc "Start a local Hermes test gateway in the background"
 
@@ -25,7 +26,6 @@ flag :key, "--key=KEY" do
 end
 
 def run
-  require "hermes_gateway"
   existing = HermesGateway.read_state(context_directory)
   if existing && HermesGateway.process_alive?(existing["pid"])
     $stderr.puts("A gateway is already running (pid #{existing['pid']}, port #{existing['port']}).")

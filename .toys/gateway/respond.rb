@@ -25,7 +25,6 @@ flag :stream, "--stream" do
 end
 
 def run
-  require "json"
   payload = {"input" => text}
   payload["previous_response_id"] = previous if previous
   payload["conversation"] = conversation if conversation

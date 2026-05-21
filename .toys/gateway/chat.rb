@@ -18,7 +18,6 @@ flag :stream, "--stream" do
 end
 
 def run
-  require "json"
   payload = {"messages" => [{"role" => "user", "content" => text}]}
   payload["stream"] = true if stream
   gateway_probe("POST", "/v1/chat/completions", body: ::JSON.generate(payload), stream: stream)

@@ -13,10 +13,16 @@ long_desc \
     "respond), then `toys gateway stop` when done."
 
 mixin "gateway_helpers" do
+  # Load the shared support library once, at execution time, when the `.lib`
+  # directory is on the load path. Tools that include this mixin therefore do
+  # not need their own requires.
+  on_initialize do
+    require "hermes_gateway"
+  end
+
   # Returns the recorded state of the running gateway, or aborts the tool with
   # a helpful message if none is running.
   def running_state
-    require "hermes_gateway"
     state = HermesGateway.read_state(context_directory)
     if state.nil? || !HermesGateway.process_alive?(state["pid"])
       $stderr.puts("No running gateway. Start one with `toys gateway start`.")

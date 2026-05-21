@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
+include "gateway_helpers"
+
 desc "Stop the local Hermes test gateway"
 
 def run
-  require "hermes_gateway"
   state = HermesGateway.read_state(context_directory)
   if state.nil?
     puts("No gateway state recorded; nothing to stop.")
