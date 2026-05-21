@@ -24,7 +24,7 @@ require "hermes_agent/client/version"
 
   spec.add_dependency "http", "~> 6.0"
   spec.add_dependency "ld-eventsource", "~> 2.6"
-  spec.required_ruby_version = ">= 2.7"
+  spec.required_ruby_version = ">= 3.4"
 
   spec.metadata["bug_tracker_uri"] = "https://github.com/dazuma/hermes-client/issues"
   spec.metadata["changelog_uri"] = "https://rubydoc.info/gems/hermes-client/#{::HermesAgent::Client::VERSION}/file/CHANGELOG.md"

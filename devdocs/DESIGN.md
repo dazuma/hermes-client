@@ -110,6 +110,8 @@ Any method that can stream accepts `stream: true` and follows a
 - With a block, it yields each parsed event as it arrives (natural backpressure)
   and returns the final aggregated object when the stream closes.
 - Without a block, it returns a `Stream` (an `Enumerable`) the caller iterates.
+  After the stream closes, the final aggregated result object can be obtained
+  from the stream.
 
 ```ruby
 # block form
