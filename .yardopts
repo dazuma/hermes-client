@@ -1,0 +1,11 @@
+--no-private
+--title=HermesAgent::Client
+--markup=markdown
+--markup-provider redcarpet
+--main=README.md
+./lib/hermes_agent/client/**/*.rb
+./lib/hermes-client.rb
+-
+README.md
+LICENSE.md
+CHANGELOG.md
