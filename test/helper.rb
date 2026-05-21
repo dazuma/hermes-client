@@ -23,7 +23,7 @@ if hermes_port && hermes_profile
       ok = true
       break
     end
-  rescue HTTP::Error => e
+  rescue HTTP::Error
     # just try again
   end
   if ok

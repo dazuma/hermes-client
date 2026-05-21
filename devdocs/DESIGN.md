@@ -37,12 +37,12 @@ lib/hermes_agent/client/
   configuration.rb    # HermesAgent::Client::Configuration
   transport.rb        # HermesAgent::Client::Transport  (HTTP + auth + JSON)
   stream.rb           # HermesAgent::Client::Stream     (SSE, block-or-enumerator)
-  object.rb           # HermesAgent::Client::Object      (base wrapper)
+  entity.rb           # HermesAgent::Client::Entity      (base wrapper)
   errors.rb           # HermesAgent::Client::Error and subclasses
-  resources/          # one file per resource group
+  resources/          # one file per resource group, under Client::Resources
     chat.rb, responses.rb, runs.rb, jobs.rb,
     models.rb, capabilities.rb, health.rb
-  objects/            # response wrappers (best-effort field readers)
+  entities/           # response wrappers under Client::Entities
     chat_completion.rb, response.rb, run.rb, job.rb, model.rb, ...
 ```
 
@@ -60,8 +60,9 @@ lib/hermes_agent/client/
 ### Return values
 
 - Successful calls return **lightweight wrapper objects** (subclasses of
-  `HermesAgent::Client::Object`). Wrappers expose method readers for the fields
-  we know about and always provide `#to_h` returning the full parsed payload —
+  `HermesAgent::Client::Entity`, under the `Entities` namespace). Wrappers expose
+  method readers for the fields we know about and always provide `#to_h`
+  returning the full parsed payload —
   the escape hatch for anything unmapped (and `#[]` for raw key access).
 - Field readers are best-effort and may change pre-1.0. The raw hash is the
   source of truth.
@@ -242,10 +243,10 @@ client.health.detailed  # GET /health/detailed   => detailed Health (sessions,
   and exposes `get` / `post` / `patch` / `delete`. It also opens SSE streams
   (handing the connection to `Stream`).
 - **Resource objects** are thin: they build paths and params and delegate to
-  `Transport`, wrapping results in the appropriate `Object` subclass.
+  `Transport`, wrapping results in the appropriate `Entity` subclass.
 - **`Stream`** wraps `ld-eventsource`, parses events into wrapper objects, and
   implements the block-or-enumerator contract.
-- **`Object`** is the wrapper base (method readers + `#to_h` + `#[]`).
+- **`Entity`** is the wrapper base (method readers + `#to_h` + `#[]`).
 
 This keeps auth, error mapping, and JSON handling in one place and makes the
 resource classes trivial to add as we map more of the API.
