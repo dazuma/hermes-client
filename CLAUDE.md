@@ -18,11 +18,12 @@ updated as the design evolves. (`devdocs/` is excluded from the packaged gem.)
 ## Commands
 
 Tooling is driven by [toys](https://dazuma.github.io/toys) (`gem install toys`),
-not Rake. Bundler is wired into each tool.
+not Rake. Bundler is already wired into each tool, and they do not need `bundle exec`.
 
 - `toys ci` — run the full CI suite (bundle, rubocop, tests, yardoc, gem build).
 - `toys ci --only --test` — run a single CI job (any of `--bundle`, `--rubocop`, `--test`, `--yard`, `--build`). `--fail-fast` and `--update` are also available.
-- `toys test` — run the unit tests.
+- `toys test` — run the unit tests only
+- `toys test --integration-port=10099 --integration-profile=hermes-test` - run all tests including integration tests against a real test gateway. These flags can also be passed to `toys ci`.
 - `toys test test/some_test.rb` — run a single test file.
 - `toys rubocop` — run the linter/style checker.
 - `toys yardoc` — build docs. **Fails on warnings and on any undocumented object**, so every public method/class needs YARD comments.
@@ -40,6 +41,11 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 - **Dependencies:** the client is built on the [`http`](https://github.com/httprb/http) gem (`~> 6.0`) for HTTP requests and [`ld-eventsource`](https://github.com/launchdarkly/ruby-eventsource) (`~> 2.6`) for consuming the Server-Sent Event streams the API emits.
 - **Ruby support:** `required_ruby_version >= 3.4`. All files use `# frozen_string_literal: true`.
 - **Docs as a gate:** because `toys yardoc` fails on undocumented objects, document public API as you add it.
+
+## Testing conventions
+
+- Tests use Minitest spec-style `describe` and `it` blocks, with traditional assertions, e.g. `assert_equal`, instead of `must`/`wont` expectations.
+- Tests that need to hit a real Hermes gateway should be guarded behind a check whether the environment variable `HERMES_CLIENT_INTEGRATION_PORT` is set. Such tests can use the value of that variable as the port number of the gateway. This variable will be set by the Toys test tool when `--integration-port=<PORT NUMBER>` and `--integration-profile=hermes-test` are passed to `toys test`.
 
 ## Target API: Hermes API Server
 
