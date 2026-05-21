@@ -262,6 +262,17 @@ client.chat.stream_create(messages:, &block)  # streams ChatCompletionChunk /
 - `messages` is the OpenAI-style array; content may include `image_url` parts
   (http(s) or `data:` URIs) for inline images.
 - OpenAI-compatible on the wire; additional sampling params flow through.
+- No `model` field is sent (server configures the model; it ignores a
+  client-supplied one). Callers can still pass one via `**extra`.
+- Observed (probed against `hermes-test`) non-streaming response: `{ id:
+  "chatcmpl-…", object: "chat.completion", created, model, choices: [{ index,
+  message: { role, content }, finish_reason }], usage: { prompt_tokens,
+  completion_tokens, total_tokens } }`. `ChatCompletion`/`ChatChoice`/
+  `ChatMessage`/`ChatUsage` mirror this.
+- Streaming (`stream_create`, body `stream: true`): unnamed `data:` frames each
+  a `chat.completion.chunk` (see "Observed streaming event types"), terminated
+  by `data: [DONE]`. No final aggregate is sent, so `ChatCompletion.from_chunks`
+  reconstructs one from the deltas.
 
 ### `client.responses` — Responses API (`/v1/responses`, server-side state)
 
