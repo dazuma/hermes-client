@@ -85,10 +85,32 @@ module HermesAgent
           raise APIError.from_response(status: response.code, body: response.body.to_s,
                                        headers: response.headers.to_h)
         end
-        response.body
+        map_stream_errors(response.body)
       end
 
       private
+
+      ##
+      # Wrap a streaming response body so transport-level failures hit while
+      # reading it are mapped to the {Error} hierarchy.
+      #
+      # The body is read lazily, chunk by chunk, *after* {#stream_post} has
+      # returned — so a socket or read-timeout failure mid-stream happens
+      # outside {#request}'s rescue and would otherwise surface as the raw
+      # `http`-gem exception. Iterating the returned enumerator re-reads the
+      # body inside {#request}, so the same {TimeoutError}/{ConnectionError}
+      # mapping applies. Chunks delivered before the failure are still yielded;
+      # the exception is raised when the failing read is reached. Keeps {Stream}
+      # HTTP-agnostic — it only ever sees mapped errors.
+      #
+      # @param body [#each] The live response body, yielding String chunks.
+      # @return [Enumerator] The same chunks, with mid-stream failures mapped.
+      #
+      def map_stream_errors(body)
+        ::Enumerator.new do |yielder|
+          request { body.each { |chunk| yielder << chunk } }
+        end
+      end
 
       ##
       # Run an HTTP request, translating the `http` gem's transport-level

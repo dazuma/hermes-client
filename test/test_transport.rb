@@ -116,6 +116,50 @@ describe ::HermesAgent::Client::Transport do
     assert_equal("Response not found: resp_x", error.message)
   end
 
+  # Build a transport whose HTTP client returns a successful (200) response
+  # whose body yields the given chunks and then, if raise_error is given,
+  # raises it mid-iteration (simulating a socket/timeout failure that occurs
+  # only once the live body is being read, after the request has returned).
+  def streaming_transport(chunks, raise_error: nil)
+    body = Object.new
+    body.define_singleton_method(:each) do |&blk|
+      chunks.each { |chunk| blk.call(chunk) }
+      raise raise_error if raise_error
+    end
+    status = Object.new
+    status.define_singleton_method(:success?) { true }
+    response = Object.new
+    response.define_singleton_method(:status) { status }
+    response.define_singleton_method(:body) { body }
+    http_client = Object.new
+    http_client.define_singleton_method(:post) { |*_args, **_kwargs| response }
+    result = transport(base_url: "https://example.test")
+    result.define_singleton_method(:client) { http_client }
+    result
+  end
+
+  it "maps a mid-stream read timeout to TimeoutError" do
+    tr = streaming_transport(["data: {}\n\n"], raise_error: ::HTTP::TimeoutError.new("read timed out"))
+    stream = tr.stream_post("/v1/responses", {})
+    assert_raises(::HermesAgent::Client::TimeoutError) { stream.each { |_chunk| nil } }
+  end
+
+  it "maps a mid-stream connection failure to ConnectionError" do
+    tr = streaming_transport([], raise_error: ::HTTP::ConnectionError.new("body ended prematurely"))
+    stream = tr.stream_post("/v1/responses", {})
+    assert_raises(::HermesAgent::Client::ConnectionError) { stream.each { |_chunk| nil } }
+  end
+
+  it "yields the chunks received before a mid-stream failure" do
+    tr = streaming_transport(["a", "b"], raise_error: ::HTTP::TimeoutError.new("boom"))
+    stream = tr.stream_post("/v1/responses", {})
+    received = []
+    assert_raises(::HermesAgent::Client::TimeoutError) do
+      stream.each { |chunk| received << chunk }
+    end
+    assert_equal(["a", "b"], received)
+  end
+
   it "joins base_url and path without a doubled slash" do
     stub = stub_request(:get, "https://example.test/health").to_return(status: 200, body: "{}")
     transport(base_url: "https://example.test/").get("/health")

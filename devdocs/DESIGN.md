@@ -416,9 +416,14 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
 - **`Transport`** is the single chokepoint for HTTP: it owns the `http` gem
   connection, attaches the `Authorization` (and optional `Idempotency-Key`)
   headers, serializes/parses JSON, maps status codes to the error hierarchy,
-  and exposes `get` / `post` / `patch` / `delete`. It also opens SSE streams
-  via `stream_post` — checking the response status up front (so errors raise
-  before any streaming) and handing the live response body to `Stream`.
+  and exposes `get` / `post` / `delete` (`patch` to come). It also opens SSE
+  streams via `stream_post` — checking the response status up front (so errors
+  raise before any streaming) and handing the live response body to `Stream`
+  wrapped (`map_stream_errors`) so that a connection/read failure encountered
+  *mid-stream* (the body is read lazily, after the request returns) is mapped
+  to `TimeoutError`/`ConnectionError`, the same as on a non-streaming request,
+  rather than leaking the raw `http`-gem exception. This keeps `Stream`
+  HTTP-agnostic: it only ever sees mapped errors.
 - **Resource objects** are thin: they build paths and params and delegate to
   `Transport`, wrapping results in the appropriate `Entity` subclass.
 - **`Stream`** consumes the response body's byte chunks, parses SSE frames
@@ -469,11 +474,21 @@ Known limitations in the current streaming implementation (deferred, revisit):
   (`n > 1`) would need the chunks grouped by `choices[].index` before
   assembling one message per choice. Not yet handled — confirm whether the
   server ever emits `n > 1` and, if so, generalize the aggregator.
-- **Mid-stream read errors are not mapped to the `Error` hierarchy.**
-  `Transport#stream_post` checks the response status up front, so an error
-  *opening* the stream raises the right `APIError` subclass before any events
-  are yielded. But a socket/timeout failure that occurs *during* iteration
-  (inside `Stream#each`, while reading the live body) currently propagates the
-  raw `http`-gem exception rather than a `ConnectionError`/`TimeoutError`.
-  Decide on the desired behavior (wrap mid-stream failures, signal a partial
-  result, etc.) and handle it in `Stream`.
+- **Malformed JSON is not mapped to the `Error` hierarchy** — and inconsistently
+  so. A non-JSON *error* body is tolerated (`APIError.parse_error_payload`
+  rescues and falls back to the raw text, for the server's router-level
+  bare-text 404/405s). But a malformed body on a *successful* response leaks a
+  raw `JSON::ParserError`: `Transport#handle` (non-streaming) and
+  `Stream#dispatch` (a malformed SSE frame) both call `JSON.parse` unguarded.
+  The two leak identically, so streaming is consistent with non-streaming here —
+  the open decision is whether to map `JSON::ParserError` into the `Error`
+  hierarchy at all (e.g. a `MalformedResponseError`), and if so to do it
+  **uniformly** across both `handle` and `dispatch` rather than only one path.
+  Deferred as its own change.
+
+Resolved (was a known limitation): **mid-stream connection/read failures are now
+mapped.** A socket/timeout failure during stream iteration is translated to
+`TimeoutError`/`ConnectionError` by `Transport#map_stream_errors` (see Internal
+layering), not the raw `http`-gem exception. Behavior is map-and-raise: chunks
+delivered before the failure stand, and no partial aggregate is produced
+(partial-result recovery was considered and declined for v1).
