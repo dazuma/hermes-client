@@ -203,7 +203,14 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
   - The delta events thread an `item_id` (`msg_…`), `output_index`, and
     `content_index`; `response.output_text.delta` carries the incremental
     `delta` string while `response.output_text.done` carries the assembled
-    `text`.
+    `text`. (Both also carry a `logprobs` array, empty in the observed turn.)
+  - The `response.output_item.added` / `response.output_item.done` events nest
+    the output item under an **`item`** key (`{ id, type, status, role,
+    content }`) alongside `output_index` — not under `response`. `added` has
+    `status: "in_progress"` with empty `content`; `done` has `status:
+    "completed"` with the assembled `content`. `ResponseStreamEvent#item`
+    wraps it as a `ResponseOutputItem`; `#response` wraps the `response` key
+    present only on `response.created`/`response.completed`.
   - **`response.completed` carries the full final `response` object** —
     `status: "completed"`, the complete `output` array (message items with
     `content: [{type: "output_text", text}]`), and a `usage` block using
@@ -292,6 +299,33 @@ client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 - Inline images supplied as `input_image` input parts.
 - Storage is capped server-side (~100 responses, LRU eviction) — callers should
   not assume older responses remain retrievable.
+- No `model` field is sent (server configures the model). `previous_response_id`
+  / `conversation` are omitted from the body when nil. Callers can pass
+  unmodeled fields via `**extra`.
+- Observed (probed against `hermes-test`) non-streaming response (`POST` and
+  `GET` return the same object): `{ id: "resp_…", object: "response", status:
+  "completed", created_at, model, output: [...], usage: { input_tokens,
+  output_tokens, total_tokens } }` — note Responses-API usage field names, not
+  chat's `prompt_tokens`/`completion_tokens`. `Response`/`ResponseOutputItem`/
+  `ResponseContent`/`ResponseUsage` mirror this.
+  - `output` is a **heterogeneous array**. A plain turn has a single `message`
+    item (`{ type: "message", role: "assistant", content: [{ type:
+    "output_text", text }] }`). A turn that runs tools (observed via a named
+    `conversation` triggering the server's `memory` tool) interleaves
+    `function_call` items (`{ type, name, arguments (raw JSON string), call_id }`)
+    and `function_call_output` items (`{ type, call_id, output (raw JSON
+    string) }`) before the final `message`. `Response#output_text` aggregates
+    only the `message` items' text.
+  - Chaining: passing `previous_response_id` carries context (verified — a
+    follow-up arithmetic turn produced the correct sum), but the chained
+    response does **not** echo `previous_response_id` in its body.
+- `DELETE /v1/responses/{id}` returns `{ id, object: "response", deleted: true }`
+  (modeled by `ResponseDeletion`); a subsequent `GET` of that id returns the
+  `404 "Response not found: …"` documented under the error section.
+- Streaming (`stream_create`, body `stream: true`): named SSE events (see
+  "Observed streaming event types"); the assembled `Response` is taken straight
+  from the terminal `response.completed` event by `Response.from_events` (no
+  reconstruction from deltas needed, and no `[DONE]` sentinel).
 
 ### `client.runs` — Runs API (long-running agent runs)
 
@@ -407,8 +441,9 @@ prettified JSON / raw SSE frames) are the means to resolve these against a
 running server; several below have been refined that way already.
 
 - Exact request bodies and response field names for each endpoint. Discovery,
-  chat completions, and the Responses API are partially mapped (see above);
-  `runs` and `jobs` request/response bodies are still largely unknown.
+  chat completions, and the Responses API (create/get/delete/stream, including
+  the non-streaming, deletion, and tool-item output shapes) are now mapped (see
+  above); `runs` and `jobs` request/response bodies are still largely unknown.
 - The full set of SSE event types and payloads. Chat-completion chunks and the
   full Responses API event sequence — including the terminal
   `response.completed` — are now captured (above); still outstanding are the
