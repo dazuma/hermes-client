@@ -50,6 +50,13 @@ describe ::HermesAgent::Client::Stream do
     assert_equal([1], seen)
   end
 
+  it "maps a malformed JSON frame to MalformedResponseError" do
+    error = assert_raises(::HermesAgent::Client::MalformedResponseError) do
+      build(["data: not json{\n\n"]).each { |_event| nil }
+    end
+    assert_equal("not json{", error.body)
+  end
+
   it "is Enumerable when called without a block" do
     stream = build(["data: {\"n\":1}\n\n", "data: {\"n\":2}\n\n"])
     assert_kind_of(::Enumerable, stream)

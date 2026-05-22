@@ -3,6 +3,7 @@
 require "json"
 
 require "hermes_agent/client/errors"
+require "hermes_agent/client/util"
 
 module HermesAgent
   class Client
@@ -136,7 +137,7 @@ module HermesAgent
         @data_lines = []
         return nil if @terminator && data == @terminator
 
-        @event_class.new(::JSON.parse(data))
+        @event_class.new(Util.parse_json(data))
       end
     end
   end

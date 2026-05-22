@@ -24,6 +24,19 @@ describe ::HermesAgent::Client::APIError do
         assert_operator(klass, :<, api_error)
       end
     end
+
+    it "places MalformedResponseError directly under Error, not APIError" do
+      assert_operator(errors::MalformedResponseError, :<, errors::Error)
+      refute_operator(errors::MalformedResponseError, :<, api_error)
+    end
+  end
+
+  describe "MalformedResponseError" do
+    it "carries the unparseable body" do
+      error = errors::MalformedResponseError.new("Invalid JSON in response body", body: "not json{")
+      assert_equal("Invalid JSON in response body", error.message)
+      assert_equal("not json{", error.body)
+    end
   end
 
   describe ".from_response" do

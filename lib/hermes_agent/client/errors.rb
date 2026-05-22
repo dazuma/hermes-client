@@ -25,6 +25,33 @@ module HermesAgent
     end
 
     ##
+    # Raised when the server returns a body the client expected to be JSON but
+    # could not parse — a malformed payload on an otherwise successful
+    # response, or a malformed streamed SSE frame. Distinct from {APIError}:
+    # the HTTP request itself succeeded; only the body was unparseable. The
+    # unparseable text is available as {#body}, and the underlying
+    # `JSON::ParserError` is preserved as the exception's `#cause`.
+    #
+    class MalformedResponseError < Error
+      ##
+      # Create a malformed-response error.
+      #
+      # @param message [String] The human-readable error message.
+      # @param body [String, nil] The raw text that could not be parsed.
+      #
+      def initialize(message, body: nil)
+        super(message)
+        @body = body
+      end
+
+      ##
+      # The raw text that could not be parsed.
+      # @return [String, nil]
+      #
+      attr_reader :body
+    end
+
+    ##
     # Raised when the server returns a non-2xx HTTP response.
     #
     # The concrete class reflects the HTTP status: {BadRequestError},

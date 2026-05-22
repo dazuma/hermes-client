@@ -2,6 +2,8 @@
 
 require "json"
 
+require "hermes_agent/client/util"
+
 module HermesAgent
   class Client
     ##
@@ -170,7 +172,7 @@ module HermesAgent
           raise APIError.from_response(status: response.code, body: body,
                                        headers: response.headers.to_h)
         end
-        body.empty? ? {} : ::JSON.parse(body)
+        body.empty? ? {} : Util.parse_json(body)
       end
     end
   end

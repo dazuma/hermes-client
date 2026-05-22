@@ -34,6 +34,14 @@ describe ::HermesAgent::Client::Transport do
     assert_equal({}, transport(base_url: "https://example.test").get("/health"))
   end
 
+  it "maps a malformed JSON body on a successful response to MalformedResponseError" do
+    stub_request(:get, "https://example.test/health").to_return(status: 200, body: "not json{")
+    error = assert_raises(::HermesAgent::Client::MalformedResponseError) do
+      transport(base_url: "https://example.test").get("/health")
+    end
+    assert_equal("not json{", error.body)
+  end
+
   it "sends a bearer Authorization header when an api_key is set" do
     stub = stub_request(:get, "https://example.test/health")
            .with(headers: {"Authorization" => "Bearer secret"})
