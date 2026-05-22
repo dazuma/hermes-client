@@ -187,6 +187,82 @@ module HermesAgent
       end
 
       ##
+      # A custom `hermes.tool.progress` event emitted on the chat-completions
+      # stream while the server agent executes a tool. It is a distinct event
+      # type from {ChatCompletionChunk} — it carries no `choices`/`delta` and is
+      # never folded into the assembled {ChatCompletion} — so tool activity does
+      # not pollute the assistant text. The Responses API does not emit these
+      # (it represents tool activity as `function_call` output items instead).
+      #
+      # Each tool call produces two events keyed by {#tool_call_id}: a
+      # `"running"` event carrying {#emoji} and {#label}, then a `"completed"`
+      # event that omits them. `status` is a lifecycle marker only — a tool that
+      # fails (or times out) still reports `"completed"`; the failure surfaces in
+      # the tool's result, not here.
+      #
+      class ChatToolProgress < Entity
+        ##
+        # The tool name, e.g. `"search_files"` or `"terminal"`.
+        # @return [String, nil]
+        #
+        def tool
+          self["tool"]
+        end
+
+        ##
+        # A decorative emoji for the tool, present on the `"running"` event.
+        # @return [String, nil]
+        #
+        def emoji
+          self["emoji"]
+        end
+
+        ##
+        # A short human-facing descriptor of the invocation (e.g. the search
+        # glob `"*"`, or the command `"ls -F"`), present on the `"running"`
+        # event.
+        # @return [String, nil]
+        #
+        def label
+          self["label"]
+        end
+
+        ##
+        # The id correlating this event's `"running"` and `"completed"` frames
+        # (read from the camelCase `toolCallId` wire field), e.g. `"call_…"`.
+        # @return [String, nil]
+        #
+        def tool_call_id
+          self["toolCallId"]
+        end
+
+        ##
+        # The lifecycle status, `"running"` or `"completed"`.
+        # @return [String, nil]
+        #
+        def status
+          self["status"]
+        end
+
+        ##
+        # Whether this event marks the tool starting to run.
+        # @return [boolean]
+        #
+        def running?
+          status == "running"
+        end
+
+        ##
+        # Whether this event marks the tool finishing execution. Note this is a
+        # lifecycle marker, not a success signal — see the class docs.
+        # @return [boolean]
+        #
+        def completed?
+          status == "completed"
+        end
+      end
+
+      ##
       # The result of a chat completion (`POST /v1/chat/completions`).
       # Field readers are best-effort; {#to_h} remains the source of truth.
       #

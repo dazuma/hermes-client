@@ -167,6 +167,62 @@ describe ::HermesAgent::Client::Entities::ChatCompletionChunk do
   end
 end
 
+describe ::HermesAgent::Client::Entities::ChatToolProgress do
+  let(:running) do
+    {
+      "tool" => "search_files",
+      "emoji" => "🔎",
+      "label" => "*",
+      "toolCallId" => "call_6941aca4c0eb",
+      "status" => "running",
+    }
+  end
+  let(:completed) do
+    {"tool" => "search_files", "toolCallId" => "call_6941aca4c0eb", "status" => "completed"}
+  end
+
+  it "reads the tool, emoji, and label" do
+    event = ::HermesAgent::Client::Entities::ChatToolProgress.new(running)
+    assert_equal("search_files", event.tool)
+    assert_equal("🔎", event.emoji)
+    assert_equal("*", event.label)
+  end
+
+  it "reads the tool_call_id from the camelCase toolCallId wire field" do
+    event = ::HermesAgent::Client::Entities::ChatToolProgress.new(running)
+    assert_equal("call_6941aca4c0eb", event.tool_call_id)
+  end
+
+  it "reads the status and exposes running?/completed? predicates" do
+    running_event = ::HermesAgent::Client::Entities::ChatToolProgress.new(running)
+    assert_equal("running", running_event.status)
+    assert_equal(true, running_event.running?)
+    assert_equal(false, running_event.completed?)
+
+    completed_event = ::HermesAgent::Client::Entities::ChatToolProgress.new(completed)
+    assert_equal("completed", completed_event.status)
+    assert_equal(false, completed_event.running?)
+    assert_equal(true, completed_event.completed?)
+  end
+
+  it "returns nil for emoji and label on a completed frame, which omits them" do
+    event = ::HermesAgent::Client::Entities::ChatToolProgress.new(completed)
+    assert_nil(event.emoji)
+    assert_nil(event.label)
+  end
+
+  it "returns nil/false for fields and predicates when absent" do
+    event = ::HermesAgent::Client::Entities::ChatToolProgress.new({})
+    assert_nil(event.tool)
+    assert_nil(event.emoji)
+    assert_nil(event.label)
+    assert_nil(event.tool_call_id)
+    assert_nil(event.status)
+    assert_equal(false, event.running?)
+    assert_equal(false, event.completed?)
+  end
+end
+
 describe "ChatCompletion.from_chunks" do
   let(:chunks) do
     [
