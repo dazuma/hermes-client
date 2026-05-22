@@ -13,6 +13,13 @@ module HermesAgent
       #
       class Chat
         ##
+        # The SSE `event:` name of the server's custom tool-progress frames,
+        # which are routed to {Entities::ChatToolProgress} rather than treated
+        # as completion chunks.
+        #
+        TOOL_PROGRESS_EVENT = "hermes.tool.progress"
+
+        ##
         # Create the resource.
         #
         # @param transport [Transport] The transport used to issue requests.
@@ -45,16 +52,23 @@ module HermesAgent
         ##
         # Create a chat completion, streaming the response.
         #
-        # With a block, each {Entities::ChatCompletionChunk} is yielded as it
-        # arrives and the assembled {Entities::ChatCompletion} is returned once
-        # the stream closes. Without a block, a {Stream} is returned for the
-        # caller to iterate; its {Stream#result} is the assembled completion.
+        # While the server agent executes tools it interleaves custom
+        # `hermes.tool.progress` frames; these are surfaced as
+        # {Entities::ChatToolProgress} events (distinct from the text
+        # {Entities::ChatCompletionChunk}s) and are not folded into the
+        # assembled completion.
+        #
+        # With a block, each event is yielded as it arrives and the assembled
+        # {Entities::ChatCompletion} is returned once the stream closes. Without
+        # a block, a {Stream} is returned for the caller to iterate; its
+        # {Stream#result} is the assembled completion.
         #
         # @param messages [Array<Hash>] The OpenAI-style message array (see
         #     {#create}).
         # @param extra [Hash] Additional request-body fields merged into the
         #     body as-is.
-        # @yieldparam chunk [Entities::ChatCompletionChunk] Each streamed chunk.
+        # @yieldparam event [Entities::ChatCompletionChunk, Entities::ChatToolProgress]
+        #     Each streamed event: a text chunk, or a tool-progress frame.
         # @return [Entities::ChatCompletion, Stream] The assembled completion
         #     when a block is given, otherwise the {Stream}.
         # @raise [APIError] If the server returns a non-2xx response.
@@ -62,7 +76,10 @@ module HermesAgent
         def stream_create(messages:, **extra, &block)
           body = {messages: messages, stream: true, **extra}
           chunks = @transport.stream_post("/v1/chat/completions", body)
-          stream = Stream.new(chunks, event_class: Entities::ChatCompletionChunk, terminator: "[DONE]") do |events|
+          event_class = lambda do |name|
+            name == TOOL_PROGRESS_EVENT ? Entities::ChatToolProgress : Entities::ChatCompletionChunk
+          end
+          stream = Stream.new(chunks, event_class: event_class, terminator: "[DONE]") do |events|
             Entities::ChatCompletion.from_chunks(events)
           end
           return stream unless block

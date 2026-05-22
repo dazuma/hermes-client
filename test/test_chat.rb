@@ -262,6 +262,21 @@ describe "ChatCompletion.from_chunks" do
     completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks([])
     assert_equal("", completion.choices.first.message.content)
   end
+
+  it "ignores non-chunk events such as ChatToolProgress when assembling" do
+    mixed = [
+      ::HermesAgent::Client::Entities::ChatToolProgress.new("tool" => "search_files", "status" => "running"),
+      ::HermesAgent::Client::Entities::ChatCompletionChunk.new(
+        "id" => "c1", "object" => "chat.completion.chunk", "created" => 4, "model" => "m",
+        "choices" => [{"index" => 0, "delta" => {"role" => "assistant", "content" => "Hi"}, "finish_reason" => "stop"}]
+      ),
+      ::HermesAgent::Client::Entities::ChatToolProgress.new("tool" => "search_files", "status" => "completed"),
+    ]
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks(mixed)
+    assert_equal("c1", completion.id)
+    assert_equal("assistant", completion.choices.first.message.role)
+    assert_equal("Hi", completion.choices.first.message.content)
+  end
 end
 
 describe ::HermesAgent::Client::Resources::Chat do
@@ -339,6 +354,58 @@ describe "Resources::Chat#stream_create" do
     text = stream.each.filter_map(&:delta).join
     assert_equal("Hello world", text)
     assert_equal("Hello world", stream.result.choices.first.message.content)
+  end
+end
+
+describe "Resources::Chat#stream_create with tool progress" do
+  let(:tool_stream_chunks) do
+    [
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n",
+      "event: hermes.tool.progress\ndata: {\"tool\":\"search_files\",\"emoji\":\"🔎\",\"label\":\"*\"," \
+      "\"toolCallId\":\"call_1\",\"status\":\"running\"}\n\n",
+      "event: hermes.tool.progress\ndata: {\"tool\":\"search_files\",\"toolCallId\":\"call_1\"," \
+      "\"status\":\"completed\"}\n\n",
+      "data: {\"object\":\"chat.completion.chunk\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]," \
+      "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n",
+      "data: [DONE]\n\n",
+    ]
+  end
+  let(:transport) { ::HermesAgent::Tests::FakeTransport.new({}, tool_stream_chunks) }
+  let(:messages) { [{role: "user", content: "list my files"}] }
+
+  it "routes named frames to ChatToolProgress and text frames to ChatCompletionChunk" do
+    classes = []
+    ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages) do |event|
+      classes << event.class
+    end
+    assert_equal(
+      [::HermesAgent::Client::Entities::ChatCompletionChunk,
+       ::HermesAgent::Client::Entities::ChatToolProgress,
+       ::HermesAgent::Client::Entities::ChatToolProgress,
+       ::HermesAgent::Client::Entities::ChatCompletionChunk],
+      classes
+    )
+  end
+
+  it "exposes the tool-progress details on the yielded ChatToolProgress events" do
+    progress = []
+    ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages) do |event|
+      progress << event if event.is_a?(::HermesAgent::Client::Entities::ChatToolProgress)
+    end
+    assert_equal("search_files", progress.first.tool)
+    assert_equal("*", progress.first.label)
+    assert_equal("call_1", progress.first.tool_call_id)
+    assert(progress.first.running?)
+    assert(progress.last.completed?)
+  end
+
+  it "assembles the completion from text chunks only, ignoring tool-progress frames" do
+    completion = ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(messages: messages) { |_event| nil }
+    assert_equal("Hello", completion.choices.first.message.content)
+    assert_equal("assistant", completion.choices.first.message.role)
+    assert_equal(3, completion.usage.total_tokens)
   end
 end
 

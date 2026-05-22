@@ -268,18 +268,20 @@ module HermesAgent
       #
       class ChatCompletion < Entity
         ##
-        # Reconstruct a completion from the chunks of a streamed turn. Chat
+        # Reconstruct a completion from the events of a streamed turn. Chat
         # streaming does not send a final aggregate object, so this assembles
         # one: the message text is the concatenation of every chunk's
         # `delta.content`, the role and finish_reason are taken from the chunks
         # that carry them, and the usage from the final chunk. Single-choice
-        # (`choices[0]`) is assumed.
+        # (`choices[0]`) is assumed. Non-chunk events (e.g. {ChatToolProgress})
+        # are ignored, so the assembled text holds only the assistant's reply.
         #
-        # @param chunks [Array<ChatCompletionChunk>] The streamed chunks, in
-        #     order.
+        # @param events [Array<Entity>] The streamed events, in order; only
+        #     {ChatCompletionChunk}s contribute to the result.
         # @return [ChatCompletion]
         #
-        def self.from_chunks(chunks)
+        def self.from_chunks(events)
+          chunks = events.select { |event| event.is_a?(ChatCompletionChunk) }
           first = chunks.empty? ? {} : chunks.first.to_h
           content = +""
           role = nil
