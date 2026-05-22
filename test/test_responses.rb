@@ -57,6 +57,17 @@ describe ::HermesAgent::Client::Entities::ResponseOutputItem do
       "output" => '{"success": true}',
     }
   end
+  # The streaming representation: output is an array of content parts, and the
+  # item carries id/status (both absent in the non-streaming shape above).
+  let(:streamed_function_call_output_item) do
+    {
+      "type" => "function_call_output",
+      "id" => "fco_3256999d6a23446b920cb3d7",
+      "status" => "completed",
+      "call_id" => "call_31079d214dc1",
+      "output" => [{"type" => "input_text", "text" => '{"exit_code": 0}'}],
+    }
+  end
 
   it "reads a message item, wrapping content parts" do
     item = ::HermesAgent::Client::Entities::ResponseOutputItem.new(message_item)
@@ -87,6 +98,24 @@ describe ::HermesAgent::Client::Entities::ResponseOutputItem do
     assert_equal('{"success": true}', item.output)
   end
 
+  it "reads the id and status present on streamed output items" do
+    item = ::HermesAgent::Client::Entities::ResponseOutputItem.new(streamed_function_call_output_item)
+    assert_equal("fco_3256999d6a23446b920cb3d7", item.id)
+    assert_equal("completed", item.status)
+  end
+
+  it "returns a non-streaming string output unchanged via output_text" do
+    item = ::HermesAgent::Client::Entities::ResponseOutputItem.new(function_call_output_item)
+    assert_equal('{"success": true}', item.output)
+    assert_equal('{"success": true}', item.output_text)
+  end
+
+  it "normalizes a streaming array output to its JSON string via output_text" do
+    item = ::HermesAgent::Client::Entities::ResponseOutputItem.new(streamed_function_call_output_item)
+    assert_kind_of(::Array, item.output)
+    assert_equal('{"exit_code": 0}', item.output_text)
+  end
+
   it "returns nil for fields when absent" do
     item = ::HermesAgent::Client::Entities::ResponseOutputItem.new({})
     assert_nil(item.type)
@@ -96,6 +125,9 @@ describe ::HermesAgent::Client::Entities::ResponseOutputItem do
     assert_nil(item.arguments)
     assert_nil(item.call_id)
     assert_nil(item.output)
+    assert_nil(item.output_text)
+    assert_nil(item.id)
+    assert_nil(item.status)
     assert_nil(item.text)
   end
 end

@@ -65,8 +65,10 @@ module HermesAgent
       # are `"message"` (an assistant reply, with {#role} and {#content}),
       # `"function_call"` (a tool invocation, with {#name}, {#arguments}, and
       # {#call_id}), and `"function_call_output"` (a tool result, with
-      # {#call_id} and {#output}). Readers for fields that do not apply to the
-      # item's type return `nil`.
+      # {#call_id}, {#output}, and {#output_text}). Readers for fields that do
+      # not apply to the item's type return `nil`. {#id} and {#status} are
+      # populated only on items carried by streaming `response.output_item.*`
+      # events, not on items read off a final {Response}.
       #
       class ResponseOutputItem < Entity
         ##
@@ -76,6 +78,27 @@ module HermesAgent
         #
         def type
           self["type"]
+        end
+
+        ##
+        # The item id (`"msg_…"`, `"fc_…"`, or `"fco_…"`). Present on items
+        # carried by streaming `response.output_item.*` events; `nil` for items
+        # read off a final {Response}'s `output` (the server omits it there).
+        # @return [String, nil]
+        #
+        def id
+          self["id"]
+        end
+
+        ##
+        # The item lifecycle status, e.g. `"in_progress"` or `"completed"`.
+        # Present on items carried by streaming `response.output_item.*` events;
+        # `nil` for items read off a final {Response}'s `output`. Like all such
+        # statuses it is a lifecycle marker, not a success signal.
+        # @return [String, nil]
+        #
+        def status
+          self["status"]
         end
 
         ##
@@ -125,12 +148,31 @@ module HermesAgent
         end
 
         ##
-        # The result of a `function_call_output` item, as the raw JSON string
-        # the server emitted (not parsed).
-        # @return [String, nil]
+        # The raw result of a `function_call_output` item, as the server
+        # emitted it. The shape differs by representation: a **raw JSON string**
+        # in non-streaming (POST/GET) bodies, but an **array of content parts**
+        # (`[{ "type" => "input_text", "text" => … }]`) in the streaming
+        # representation. Use {#output_text} for the result text regardless of
+        # shape.
+        # @return [String, Array<Hash>, nil]
         #
         def output
           self["output"]
+        end
+
+        ##
+        # The result text of a `function_call_output` item, normalized across
+        # both {#output} shapes: the string itself when non-streaming, or the
+        # concatenated `text` of the content parts when streaming. Returns `nil`
+        # when there is no `output` (e.g. a non-output item).
+        # @return [String, nil]
+        #
+        def output_text
+          raw = self["output"]
+          return raw if raw.is_a?(::String)
+          return nil unless raw.is_a?(::Array)
+
+          raw.filter_map { |part| part["text"] if part.is_a?(::Hash) }.join
         end
 
         ##
