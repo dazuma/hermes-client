@@ -518,5 +518,32 @@ describe "responses" do
     ensure
       client.responses.delete(response.id) if response&.id
     end
+
+    it "surfaces function-call items with id/status/output_text on a tool-executing stream" do
+      # The `date` command runs a single fast tool, unlike a directory listing
+      # (which triggers a slow, timeout-prone search_files scan).
+      prompt = "Please run the shell command 'date' in the terminal and tell me the output."
+      call_outputs = []
+      response = client.responses.stream_create(input: prompt) do |event|
+        item = event.item
+        call_outputs << item if item && item.type == "function_call_output"
+      end
+
+      refute_empty(call_outputs, "expected a function_call_output item in the stream")
+      output_item = call_outputs.first
+      refute_nil(output_item.id, "streamed items carry an id")
+      refute_nil(output_item.status)
+      refute_nil(output_item.call_id)
+      refute_empty(output_item.output_text)
+
+      # The assembled response includes the tool items and the final message text.
+      assert_instance_of(::HermesAgent::Client::Entities::Response, response)
+      types = response.output.map(&:type)
+      assert_includes(types, "function_call")
+      assert_includes(types, "function_call_output")
+      refute_empty(response.output_text)
+    ensure
+      client.responses.delete(response.id) if response&.id
+    end
   end
 end
