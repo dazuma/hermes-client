@@ -91,6 +91,31 @@ describe ::HermesAgent::Client::Transport do
     end
   end
 
+  it "issues a DELETE and parses the JSON response" do
+    stub = stub_request(:delete, "https://example.test/v1/responses/resp_1")
+           .to_return(status: 200, body: '{"id":"resp_1","object":"response","deleted":true}')
+    result = transport(base_url: "https://example.test").delete("/v1/responses/resp_1")
+    assert_equal({"id" => "resp_1", "object" => "response", "deleted" => true}, result)
+    assert_requested(stub)
+  end
+
+  it "sends the bearer Authorization header on a delete" do
+    stub = stub_request(:delete, "https://example.test/v1/responses/resp_1")
+           .with(headers: {"Authorization" => "Bearer secret"})
+           .to_return(status: 200, body: "{}")
+    transport(base_url: "https://example.test", api_key: "secret").delete("/v1/responses/resp_1")
+    assert_requested(stub)
+  end
+
+  it "maps a delete error response to the status-mapped APIError" do
+    body = '{"error":{"message":"Response not found: resp_x","type":"invalid_request_error"}}'
+    stub_request(:delete, "https://example.test/v1/responses/resp_x").to_return(status: 404, body: body)
+    error = assert_raises(::HermesAgent::Client::NotFoundError) do
+      transport(base_url: "https://example.test").delete("/v1/responses/resp_x")
+    end
+    assert_equal("Response not found: resp_x", error.message)
+  end
+
   it "joins base_url and path without a doubled slash" do
     stub = stub_request(:get, "https://example.test/health").to_return(status: 200, body: "{}")
     transport(base_url: "https://example.test/").get("/health")

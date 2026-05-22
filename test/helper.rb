@@ -87,6 +87,11 @@ module HermesAgent
         @response
       end
 
+      def delete(path)
+        @requested_path = path
+        @response
+      end
+
       def stream_post(path, body)
         @requested_path = path
         @requested_body = body
