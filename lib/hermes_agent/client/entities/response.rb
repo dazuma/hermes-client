@@ -155,6 +155,27 @@ module HermesAgent
       #
       class Response < Entity
         ##
+        # Build a {Response} from a streamed turn's events. The terminal
+        # `response.completed` event carries the full final response object, so
+        # this takes the last `response` payload seen across the events (which
+        # is that terminal one — `response.created` carries an interim one).
+        # Returns a {Response} wrapping an empty payload if no event carried a
+        # `response` object.
+        #
+        # @param events [Array<ResponseStreamEvent>] The streamed events, in
+        #     order.
+        # @return [Response]
+        #
+        def self.from_events(events)
+          payload = {}
+          events.each do |event|
+            raw = event["response"]
+            payload = raw if raw.is_a?(::Hash)
+          end
+          new(payload)
+        end
+
+        ##
         # The response id, e.g. `"resp_…"`. Pass it as `previous_response_id` to
         # chain a follow-up turn.
         # @return [String, nil]
@@ -229,6 +250,99 @@ module HermesAgent
           return nil unless items
 
           items.select { |item| item.type == "message" }.filter_map(&:text).join
+        end
+      end
+
+      ##
+      # One event in a streamed Responses turn ({Resources::Responses#stream_create}).
+      #
+      # The Responses API emits **named** SSE events; each payload repeats the
+      # name in its {#type} and carries a 0-based {#sequence_number}. The
+      # observed sequence for a simple turn is `response.created` →
+      # `response.output_item.added` → `response.output_text.delta` (one per
+      # delta) → `response.output_text.done` → `response.output_item.done` →
+      # `response.completed` (terminal; there is no `[DONE]` sentinel). Which
+      # readers are meaningful depends on {#type}; the rest return `nil`.
+      #
+      class ResponseStreamEvent < Entity
+        ##
+        # The event type, e.g. `"response.output_text.delta"` or
+        # `"response.completed"`.
+        # @return [String, nil]
+        #
+        def type
+          self["type"]
+        end
+
+        ##
+        # The 0-based sequence number of this event within the turn.
+        # @return [Integer, nil]
+        #
+        def sequence_number
+          self["sequence_number"]
+        end
+
+        ##
+        # The incremental text on a `response.output_text.delta` event.
+        # @return [String, nil]
+        #
+        def delta
+          self["delta"]
+        end
+
+        ##
+        # The assembled text on a `response.output_text.done` event.
+        # @return [String, nil]
+        #
+        def text
+          self["text"]
+        end
+
+        ##
+        # The id of the output item a text delta/done event applies to
+        # (`"msg_…"`).
+        # @return [String, nil]
+        #
+        def item_id
+          self["item_id"]
+        end
+
+        ##
+        # The index of the output item this event applies to.
+        # @return [Integer, nil]
+        #
+        def output_index
+          self["output_index"]
+        end
+
+        ##
+        # The index of the content part within the item this event applies to.
+        # @return [Integer, nil]
+        #
+        def content_index
+          self["content_index"]
+        end
+
+        ##
+        # The nested response object on a `response.created` or
+        # `response.completed` event, wrapped in a {Response}. Returns `nil` on
+        # events that carry no response object.
+        # @return [Response, nil]
+        #
+        def response
+          raw = self["response"]
+          raw.is_a?(::Hash) ? Response.new(raw) : nil
+        end
+
+        ##
+        # The nested output item on a `response.output_item.added` or
+        # `response.output_item.done` event, wrapped in a
+        # {ResponseOutputItem}. Returns `nil` on events that carry no item.
+        # @return [ResponseOutputItem, nil]
+        #
+        def item
+          raw = self["item"]
+          raw.is_a?(::Hash) ? ResponseOutputItem.new(raw) : nil
         end
       end
 

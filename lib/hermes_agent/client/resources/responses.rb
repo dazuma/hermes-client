@@ -52,6 +52,41 @@ module HermesAgent
         end
 
         ##
+        # Create a response, streaming the turn's events.
+        #
+        # With a block, each {Entities::ResponseStreamEvent} is yielded as it
+        # arrives and the assembled {Entities::Response} is returned once the
+        # stream closes. Without a block, a {Stream} is returned for the caller
+        # to iterate; its {Stream#result} is the assembled response. The final
+        # response is taken from the terminal `response.completed` event (see
+        # {Entities::Response.from_events}).
+        #
+        # @param input [String, Array<Hash>] The input (see {#create}).
+        # @param previous_response_id [String, nil] The id of a prior response
+        #     to chain onto. Omitted from the request when `nil`.
+        # @param conversation [String, nil] A stable conversation name to chain
+        #     onto. Omitted from the request when `nil`.
+        # @param extra [Hash] Additional request-body fields merged into the
+        #     body as-is.
+        # @yieldparam event [Entities::ResponseStreamEvent] Each streamed event.
+        # @return [Entities::Response, Stream] The assembled response when a
+        #     block is given, otherwise the {Stream}.
+        # @raise [APIError] If the server returns a non-2xx response.
+        #
+        def stream_create(input:, previous_response_id: nil, conversation: nil, **extra, &block)
+          body = build_body(input, previous_response_id, conversation, extra)
+          body[:stream] = true
+          chunks = @transport.stream_post("/v1/responses", body)
+          stream = Stream.new(chunks, event_class: Entities::ResponseStreamEvent) do |events|
+            Entities::Response.from_events(events)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          stream.result
+        end
+
+        ##
         # Retrieve a previously created response by id.
         #
         # @param id [String] The response id (`"resp_…"`).

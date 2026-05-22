@@ -196,6 +196,115 @@ describe ::HermesAgent::Client::Entities::ResponseDeletion do
   end
 end
 
+describe ::HermesAgent::Client::Entities::ResponseStreamEvent do
+  let(:created_event) do
+    {
+      "type" => "response.created",
+      "response" => {"id" => "resp_1", "object" => "response", "status" => "in_progress"},
+      "sequence_number" => 0,
+    }
+  end
+  let(:item_added_event) do
+    {
+      "type" => "response.output_item.added",
+      "output_index" => 0,
+      "item" => {"id" => "msg_1", "type" => "message", "role" => "assistant", "content" => []},
+      "sequence_number" => 1,
+    }
+  end
+  let(:delta_event) do
+    {
+      "type" => "response.output_text.delta",
+      "item_id" => "msg_1", "output_index" => 0, "content_index" => 0,
+      "delta" => "ping", "sequence_number" => 2
+    }
+  end
+  let(:done_event) do
+    {
+      "type" => "response.output_text.done",
+      "item_id" => "msg_1", "output_index" => 0, "content_index" => 0,
+      "text" => "ping", "sequence_number" => 3
+    }
+  end
+
+  it "reads the type and sequence_number" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new(created_event)
+    assert_equal("response.created", event.type)
+    assert_equal(0, event.sequence_number)
+  end
+
+  it "reads the incremental delta and threading fields on a delta event" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new(delta_event)
+    assert_equal("ping", event.delta)
+    assert_equal("msg_1", event.item_id)
+    assert_equal(0, event.output_index)
+    assert_equal(0, event.content_index)
+  end
+
+  it "reads the assembled text on a done event" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new(done_event)
+    assert_equal("ping", event.text)
+  end
+
+  it "wraps the nested response object on a created/completed event" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new(created_event)
+    assert_instance_of(::HermesAgent::Client::Entities::Response, event.response)
+    assert_equal("resp_1", event.response.id)
+  end
+
+  it "wraps the nested item object on an output_item event" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new(item_added_event)
+    assert_instance_of(::HermesAgent::Client::Entities::ResponseOutputItem, event.item)
+    assert_equal("message", event.item.type)
+  end
+
+  it "returns nil for fields when absent" do
+    event = ::HermesAgent::Client::Entities::ResponseStreamEvent.new({})
+    assert_nil(event.type)
+    assert_nil(event.sequence_number)
+    assert_nil(event.delta)
+    assert_nil(event.text)
+    assert_nil(event.item_id)
+    assert_nil(event.output_index)
+    assert_nil(event.content_index)
+    assert_nil(event.response)
+    assert_nil(event.item)
+  end
+end
+
+describe "Response.from_events" do
+  let(:events) do
+    [
+      {"type" => "response.created",
+       "response" => {"id" => "resp_1", "object" => "response", "status" => "in_progress", "output" => []},
+       "sequence_number" => 0},
+      {"type" => "response.output_text.delta", "delta" => "ping", "sequence_number" => 2},
+      {"type" => "response.completed",
+       "response" => {"id" => "resp_1", "object" => "response", "status" => "completed",
+                      "output" => [{"type" => "message", "role" => "assistant",
+                                    "content" => [{"type" => "output_text", "text" => "ping"}]}],
+                      "usage" => {"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}},
+       "sequence_number" => 5},
+    ].map { |hash| ::HermesAgent::Client::Entities::ResponseStreamEvent.new(hash) }
+  end
+
+  it "takes the final response object from the terminal response.completed event" do
+    response = ::HermesAgent::Client::Entities::Response.from_events(events)
+    assert_instance_of(::HermesAgent::Client::Entities::Response, response)
+    assert_equal("resp_1", response.id)
+    assert_equal("completed", response.status)
+    assert_equal("ping", response.output_text)
+    assert_equal(2, response.usage.total_tokens)
+  end
+
+  it "returns a Response wrapping an empty payload when no event carried a response" do
+    bare = [::HermesAgent::Client::Entities::ResponseStreamEvent.new("type" => "response.output_text.delta")]
+    response = ::HermesAgent::Client::Entities::Response.from_events(bare)
+    assert_instance_of(::HermesAgent::Client::Entities::Response, response)
+    assert_nil(response.id)
+  end
+end
+
 describe ::HermesAgent::Client::Resources::Responses do
   let(:transport) do
     ::HermesAgent::Tests::FakeTransport.new("id" => "resp_1", "object" => "response")
@@ -258,6 +367,63 @@ describe ::HermesAgent::Client::Resources::Responses do
   end
 end
 
+describe "Resources::Responses#stream_create" do
+  def frame(hash)
+    "event: #{hash['type']}\ndata: #{::JSON.generate(hash)}\n\n"
+  end
+
+  let(:stream_chunks) do
+    [
+      frame("type" => "response.created",
+            "response" => {"id" => "resp_1", "object" => "response", "status" => "in_progress", "output" => []},
+            "sequence_number" => 0),
+      frame("type" => "response.output_text.delta", "item_id" => "msg_1", "delta" => "Hello", "sequence_number" => 2),
+      frame("type" => "response.output_text.delta", "item_id" => "msg_1", "delta" => " world", "sequence_number" => 3),
+      frame("type" => "response.completed",
+            "response" => {"id" => "resp_1", "object" => "response", "status" => "completed",
+                           "output" => [{"type" => "message", "role" => "assistant",
+                                         "content" => [{"type" => "output_text", "text" => "Hello world"}]}],
+                           "usage" => {"input_tokens" => 1, "output_tokens" => 2, "total_tokens" => 3}},
+            "sequence_number" => 5),
+    ]
+  end
+  let(:transport) { ::HermesAgent::Tests::FakeTransport.new({}, stream_chunks) }
+
+  it "posts to /v1/responses with stream enabled and the input" do
+    ::HermesAgent::Client::Resources::Responses.new(transport).stream_create(input: "hi").result
+    assert_equal("/v1/responses", transport.requested_path)
+    assert_equal("hi", transport.requested_body[:input])
+    assert_equal(true, transport.requested_body[:stream])
+  end
+
+  it "sends previous_response_id and conversation when chaining" do
+    resource = ::HermesAgent::Client::Resources::Responses.new(transport)
+    resource.stream_create(input: "hi", previous_response_id: "resp_0", conversation: "c1").result
+    assert_equal("resp_0", transport.requested_body[:previous_response_id])
+    assert_equal("c1", transport.requested_body[:conversation])
+  end
+
+  it "yields ResponseStreamEvent events and returns the assembled Response (block form)" do
+    deltas = []
+    response = ::HermesAgent::Client::Resources::Responses.new(transport).stream_create(input: "hi") do |event|
+      assert_instance_of(::HermesAgent::Client::Entities::ResponseStreamEvent, event)
+      deltas << event.delta if event.delta
+    end
+    assert_equal(["Hello", " world"], deltas)
+    assert_instance_of(::HermesAgent::Client::Entities::Response, response)
+    assert_equal("Hello world", response.output_text)
+    assert_equal(3, response.usage.total_tokens)
+  end
+
+  it "returns a Stream the caller can iterate (enumerator form)" do
+    stream = ::HermesAgent::Client::Resources::Responses.new(transport).stream_create(input: "hi")
+    assert_instance_of(::HermesAgent::Client::Stream, stream)
+    text = stream.each.filter_map(&:delta).join
+    assert_equal("Hello world", text)
+    assert_equal("Hello world", stream.result.output_text)
+  end
+end
+
 describe "responses" do
   integration_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
 
@@ -305,6 +471,20 @@ describe "responses" do
     ensure
       client.responses.delete(first.id) if first
       client.responses.delete(second.id) if second
+    end
+
+    it "streams a response turn against the live gateway" do
+      deltas = []
+      response = client.responses.stream_create(input: "Count: one two three") do |event|
+        assert_instance_of(::HermesAgent::Client::Entities::ResponseStreamEvent, event)
+        deltas << event.delta if event.delta
+      end
+      assert_instance_of(::HermesAgent::Client::Entities::Response, response)
+      streamed_text = deltas.join
+      refute_empty(streamed_text)
+      assert_equal(streamed_text, response.output_text)
+    ensure
+      client.responses.delete(response.id) if response&.id
     end
   end
 end
