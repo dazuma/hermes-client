@@ -12,6 +12,7 @@ require "hermes_agent/client/resources/capabilities"
 require "hermes_agent/client/resources/chat"
 require "hermes_agent/client/resources/health"
 require "hermes_agent/client/resources/models"
+require "hermes_agent/client/resources/responses"
 
 ##
 # Classes related to the Hermes agent
@@ -87,6 +88,15 @@ module HermesAgent
     #
     def models
       @models ||= Resources::Models.new(@transport)
+    end
+
+    ##
+    # The responses resource (the Responses API, with server-side
+    # conversation state).
+    # @return [Resources::Responses]
+    #
+    def responses
+      @responses ||= Resources::Responses.new(@transport)
     end
   end
 end

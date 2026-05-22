@@ -32,4 +32,14 @@ describe ::HermesAgent::Client do
     client = ::HermesAgent::Client.new
     assert_same(client.health, client.health)
   end
+
+  it "exposes a responses resource" do
+    client = ::HermesAgent::Client.new
+    assert_instance_of(::HermesAgent::Client::Resources::Responses, client.responses)
+  end
+
+  it "memoizes the responses resource" do
+    client = ::HermesAgent::Client.new
+    assert_same(client.responses, client.responses)
+  end
 end
