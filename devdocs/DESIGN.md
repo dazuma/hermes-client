@@ -243,6 +243,24 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
     (note: *not* chat's `prompt_tokens`/`completion_tokens`). The `Stream`
     aggregator can therefore take the final `Response` straight from this
     event rather than reconstructing it from deltas.
+  - A **tool-executing turn** (captured with the same "list the files in my
+    current directory" prompt) uses the **same** `response.output_item.added` /
+    `.done` events — there are **no `hermes.tool.progress` frames** (that custom
+    event is chat-completions-only) and **no separate function-call event
+    types**. Each tool call and its result are ordinary output items, each with
+    its own `output_index`, in sequence: a `function_call` item (`{ id: fc_…,
+    type, status, name, call_id, arguments }`), then a `function_call_output`
+    item (`{ id: fco_…, type, call_id, status, output: [{ type: "input_text",
+    text }] }`), repeated per tool, then the final `message` item — all also
+    echoed in `response.completed`'s `output` array. Notable details: the
+    `arguments` JSON string is delivered **whole** in the `added` event (no
+    `response.function_call_arguments.delta` streaming); `function_call_output`'s
+    `output` is an **array of content parts** (each a `{ type: "input_text",
+    text }` whose `text` is itself a JSON string), which differs from the raw
+    JSON-string `output` recorded for the non-streaming GET shape below — worth
+    reconciling. As with chat, `status` is lifecycle-only: `search_files` here
+    *timed out* (`"[Command timed out after 60s]"`) yet its item still reported
+    `status: "completed"`, and the model recovered by calling `terminal`.
 
 ## Client construction and configuration
 
