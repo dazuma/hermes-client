@@ -211,8 +211,9 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
     observed. (A framework-level refusal or a timeout might still produce
     another status — untested.) These frames are **not**
     `chat.completion.chunk` objects (no `choices`/`delta`), so the streaming
-    layer must route them to a distinct event type and keep them out of the
-    `ChatCompletion.from_chunks` delta aggregation.
+    layer routes them — by SSE event name — to the distinct
+    `ChatToolProgress` event type (still yielded to the caller's block) and
+    keeps them out of the `ChatCompletion.from_chunks` delta aggregation.
 - **Responses API** streams **named** events; each `data:` payload repeats the
   name in a `type` field and carries a monotonic `sequence_number` (0-based).
   Full observed order for a simple text turn: `response.created` (seq 0) →
@@ -471,11 +472,17 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
   `Transport`, wrapping results in the appropriate `Entity` subclass.
 - **`Stream`** consumes the response body's byte chunks, parses SSE frames
   in-house (no external SSE library), wraps each frame's `data` payload in an
-  event wrapper, and implements the block-or-enumerator contract. It is
-  single-pass and HTTP-agnostic (it consumes anything yielding String chunks
-  via `#each`), and builds the final aggregated object via an injected
-  aggregator — for chat, `ChatCompletion.from_chunks` (the chat stream sends no
-  final aggregate object, so it is reconstructed from the deltas).
+  event wrapper, and implements the block-or-enumerator contract. The
+  `event_class:` may be a single `Entity` subclass (wrapping every frame) or a
+  callable that picks the class from the frame's SSE `event:` name — the latter
+  lets one stream surface heterogeneous events (chat uses it to route
+  `hermes.tool.progress` frames to `ChatToolProgress` and everything else to
+  `ChatCompletionChunk`; Responses passes a single class since its event
+  identity is carried in-payload as `type`). It is single-pass and
+  HTTP-agnostic (it consumes anything yielding String chunks via `#each`), and
+  builds the final aggregated object via an injected aggregator — for chat,
+  `ChatCompletion.from_chunks`, which ignores non-chunk events (the chat stream
+  sends no final aggregate object, so it is reconstructed from the deltas).
 - **`Entity`** is the wrapper base (method readers + `#to_h` + `#[]`).
 
 This keeps auth, error mapping, and JSON handling in one place and makes the
