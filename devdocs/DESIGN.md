@@ -185,9 +185,34 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
   line) whose `data:` is a `chat.completion.chunk` object. The first chunk
   carries `delta.role`, subsequent chunks carry `delta.content`, and the final
   chunk has an empty `delta`, `finish_reason: "stop"`, and a `usage` block. The
-  stream terminates with a literal `data: [DONE]` sentinel. (The custom
-  `hermes.tool.progress` events were not seen in a plain text completion and
-  still need to be captured during actual tool execution.)
+  stream terminates with a literal `data: [DONE]` sentinel. All chunks (and the
+  tool-progress frames below) share a single stable `id` for the whole stream.
+  - **`hermes.tool.progress`** events (captured by prompting `hermes-test` to
+    "list the files in my current directory", which made the server agent
+    autonomously run tools) are the one **named** frame in the chat stream:
+    `event: hermes.tool.progress` with a `data:` payload that — unlike the
+    Responses API's named events — has **no `type` field and no
+    `sequence_number`**. They are **interleaved** between the role chunk and
+    the content chunks (tools run before the assistant text is produced). Each
+    tool call emits **two** events keyed by a `toolCallId` (`call_…`): a
+    `status: "running"` event carrying `{ tool, emoji, label, toolCallId,
+    status }` and a `status: "completed"` event carrying only `{ tool,
+    toolCallId, status }` (no `emoji`/`label`). `tool` is the tool name (e.g.
+    `search_files`, `terminal`); `label` is a short human-facing descriptor of
+    the invocation (e.g. the search glob `*`, or the command `ls -F`). A single
+    turn can run **multiple** tools (the observed turn ran `search_files` then
+    `terminal`, four frames total). `status` appears to be a pure **lifecycle**
+    marker (tool started / tool finished executing), **not** a success/failure
+    signal: probing three deliberate failure modes — `read_file` on a
+    nonexistent path, and `terminal`/`sqlite3` against a permission-protected
+    file — every call still reported `running` → `completed`. Tool *failures*
+    are surfaced as the tool's result content (which the model then narrates),
+    not as a distinct progress status; no `error`/`failed` status was
+    observed. (A framework-level refusal or a timeout might still produce
+    another status — untested.) These frames are **not**
+    `chat.completion.chunk` objects (no `choices`/`delta`), so the streaming
+    layer must route them to a distinct event type and keep them out of the
+    `ChatCompletion.from_chunks` delta aggregation.
 - **Responses API** streams **named** events; each `data:` payload repeats the
   name in a `type` field and carries a monotonic `sequence_number` (0-based).
   Full observed order for a simple text turn: `response.created` (seq 0) →
@@ -449,11 +474,10 @@ running server; several below have been refined that way already.
   chat completions, and the Responses API (create/get/delete/stream, including
   the non-streaming, deletion, and tool-item output shapes) are now mapped (see
   above); `runs` and `jobs` request/response bodies are still largely unknown.
-- The full set of SSE event types and payloads. Chat-completion chunks and the
-  full Responses API event sequence — including the terminal
-  `response.completed` — are now captured (above); still outstanding are the
-  custom `hermes.tool.progress` shape (needs a tool-executing run) and the run
-  events stream.
+- The full set of SSE event types and payloads. Chat-completion chunks
+  (including the custom `hermes.tool.progress` frames) and the full Responses
+  API event sequence — including the terminal `response.completed` — are now
+  captured (above); still outstanding is the run events stream.
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
   arrays. (`models` was observed returning a full `{ object: "list", data }`
   with no pagination fields.)
@@ -474,6 +498,7 @@ Known limitations in the current streaming implementation (deferred, revisit):
   (`n > 1`) would need the chunks grouped by `choices[].index` before
   assembling one message per choice. Not yet handled — confirm whether the
   server ever emits `n > 1` and, if so, generalize the aggregator.
+
 Resolved (were known limitations):
 
 - **Mid-stream connection/read failures are now mapped.** A socket/timeout
