@@ -36,8 +36,12 @@ module HermesAgent
       #
       # @param chunks [#each] A source of String byte chunks (e.g. an `http`
       #     response body).
-      # @param event_class [Class] The {Entity} subclass each frame's parsed
-      #     data is wrapped in.
+      # @param event_class [Class, #call] How each frame's parsed data is
+      #     wrapped. A {Entity} subclass wraps every frame regardless of its
+      #     SSE `event:` name. A callable instead receives the frame's event
+      #     name (`nil` for an unnamed frame) and returns the {Entity} subclass
+      #     to use, so a single stream can surface heterogeneous event types
+      #     (e.g. chat's `hermes.tool.progress` frames vs. completion chunks).
       # @param terminator [String, nil] A sentinel `data` payload that marks
       #     the end of the stream (e.g. `"[DONE]"` for chat completions). The
       #     terminator frame is not yielded. `nil` means the stream simply
@@ -53,6 +57,7 @@ module HermesAgent
         @aggregator = aggregator
         @buffer = +""
         @data_lines = []
+        @event_name = nil
         @events = []
         @consumed = false
         @result = nil
@@ -109,8 +114,8 @@ module HermesAgent
       end
 
       ##
-      # Process one SSE line. Accumulates `data` fields and, on a blank line,
-      # dispatches the buffered frame.
+      # Process one SSE line. Accumulates `data` fields, records the frame's
+      # `event:` name, and on a blank line dispatches the buffered frame.
       #
       # @param line [String] One line, without its trailing newline.
       # @return [Entity, nil] The event when a frame completes, else `nil`.
@@ -121,23 +126,39 @@ module HermesAgent
 
         field, separator, value = line.partition(":")
         value = value.sub(/\A /, "") unless separator.empty?
-        @data_lines << value if field == "data"
+        case field
+        when "data" then @data_lines << value
+        when "event" then @event_name = value
+        end
         nil
       end
 
       ##
-      # Emit the buffered frame, unless it is empty or the terminator.
+      # Emit the buffered frame, unless it is empty or the terminator. Resets
+      # the per-frame state (data lines and event name) either way so it does
+      # not leak into the next frame.
       #
       # @return [Entity, nil]
       #
       def dispatch
-        return nil if @data_lines.empty?
-
-        data = @data_lines.join("\n")
+        data = @data_lines.empty? ? nil : @data_lines.join("\n")
+        name = @event_name
         @data_lines = []
-        return nil if @terminator && data == @terminator
+        @event_name = nil
+        return nil if data.nil? || (@terminator && data == @terminator)
 
-        @event_class.new(Util.parse_json(data))
+        event_class_for(name).new(Util.parse_json(data))
+      end
+
+      ##
+      # Resolve the {Entity} subclass for a frame: a callable `event_class`
+      # chooses by event name, otherwise the class itself is used for all.
+      #
+      # @param name [String, nil] The frame's SSE `event:` name.
+      # @return [Class]
+      #
+      def event_class_for(name)
+        @event_class.respond_to?(:call) ? @event_class.call(name) : @event_class
       end
     end
   end
