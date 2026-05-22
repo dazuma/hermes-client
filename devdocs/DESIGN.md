@@ -255,13 +255,28 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
     text }] }`), repeated per tool, then the final `message` item — all also
     echoed in `response.completed`'s `output` array. Notable details: the
     `arguments` JSON string is delivered **whole** in the `added` event (no
-    `response.function_call_arguments.delta` streaming); `function_call_output`'s
-    `output` is an **array of content parts** (each a `{ type: "input_text",
-    text }` whose `text` is itself a JSON string), which differs from the raw
-    JSON-string `output` recorded for the non-streaming GET shape below — worth
-    reconciling. As with chat, `status` is lifecycle-only: `search_files` here
-    *timed out* (`"[Command timed out after 60s]"`) yet its item still reported
-    `status: "completed"`, and the model recovered by calling `terminal`.
+    `response.function_call_arguments.delta` streaming). As with chat, `status`
+    is lifecycle-only: a tool that *times out* (`"[Command timed out after
+    60s]"`) still reports `status: "completed"`, and the model recovers by
+    calling another tool.
+  - **Reconciled — `output` shape and `id`/`status` differ by representation**
+    (probed by running one `terminal` turn and capturing its stream, its
+    non-streaming POST, and a GET of the same id):
+    - A `function_call_output`'s **`output`** is an **array of content parts**
+      (`[{ type: "input_text", text }]`, the `text` itself a JSON string) in
+      **every streaming** form — both the per-item `output_item.added`/`.done`
+      events *and* the terminal `response.completed.output` — but a **raw JSON
+      string** in the **non-streaming** POST and GET bodies. So the *same*
+      `output` field is an Array on a streamed `Response` and a String on a
+      fetched/created one; the client tolerates both (`ResponseOutputItem#output`
+      passes the raw value through, and `#output_text` normalizes to the
+      string).
+    - Output-item **`id`** (`fc_…`/`fco_…`/`msg_…`) and **`status`** appear
+      **only** on items inside the per-item streaming events; they are absent
+      from the non-streaming `output` array *and* from the streamed terminal
+      `response.completed.output`. So `ResponseOutputItem#id`/`#status` are
+      populated for items obtained via stream events and `nil` for items read
+      off a final `Response#output`.
 
 ## Client construction and configuration
 
@@ -359,7 +374,9 @@ client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
     `function_call` items (`{ type, name, arguments (raw JSON string), call_id }`)
     and `function_call_output` items (`{ type, call_id, output (raw JSON
     string) }`) before the final `message`. `Response#output_text` aggregates
-    only the `message` items' text.
+    only the `message` items' text. (Note: in the **streaming** representation
+    `output` is instead an array of content parts and items carry `id`/`status`
+    — see the reconciliation note under "Observed streaming event types".)
   - Chaining: passing `previous_response_id` carries context (verified — a
     follow-up arithmetic turn produced the correct sum), but the chained
     response does **not** echo `previous_response_id` in its body.
