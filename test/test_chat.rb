@@ -438,5 +438,31 @@ describe "chat" do
       refute_empty(streamed_text)
       assert_equal(streamed_text, completion.choices.first.message.content)
     end
+
+    it "surfaces tool-progress events on a tool-executing stream against the live gateway" do
+      # The `date` command runs a single fast tool, unlike a directory listing
+      # (which triggers a slow, timeout-prone search_files scan).
+      prompt = "Please run the shell command 'date' in the terminal and tell me the output."
+      progress = []
+      chunks = []
+      completion = client.chat.stream_create(messages: [{role: "user", content: prompt}]) do |event|
+        case event
+        when ::HermesAgent::Client::Entities::ChatToolProgress then progress << event
+        when ::HermesAgent::Client::Entities::ChatCompletionChunk then chunks << event
+        end
+      end
+
+      refute_empty(progress, "expected at least one hermes.tool.progress event")
+      refute_nil(progress.first.tool)
+      refute_nil(progress.first.tool_call_id)
+      assert(progress.any?(&:running?), "expected a running event")
+      assert(progress.any?(&:completed?), "expected a completed event")
+
+      # Tool frames are routed out of the assembled text, which still arrives
+      # via ordinary chunks.
+      assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
+      refute_empty(chunks)
+      refute_empty(completion.choices.first.message.content)
+    end
   end
 end
