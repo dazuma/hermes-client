@@ -52,10 +52,144 @@ API_SERVER_CORS_ORIGINS=http://localhost:3000  # optional
 - **DELETE `/v1/responses/{id}`** — delete a stored response.
 
 ### Runs API
-- **POST `/v1/runs`** — create an agent run; returns a `run_id`.
+
+A streaming-friendly alternative for long-form sessions: instead of the client
+managing a streaming connection directly, it creates a run and then subscribes
+to a progress event stream. Designed so dashboards / thick clients can
+**attach and detach without losing state** (the run keeps executing
+server-side). Use it for long-form, multi-step agent execution where you want
+progress tracking via a `run_id` rather than an inline stream.
+
+- **POST `/v1/runs`** — create an agent run; returns a `run_id`. (Responds `202 Accepted`.)
 - **GET `/v1/runs/{run_id}`** — poll run state.
 - **GET `/v1/runs/{run_id}/events`** — Server-Sent Events stream of progress.
 - **POST `/v1/runs/{run_id}/stop`** — interrupt a running agent.
+- **POST `/v1/runs/{run_id}/approval`** — respond to a tool-approval request
+  (human-in-the-loop). **Not on the published docs page**; discovered via
+  `GET /v1/capabilities` (`run_approval`/`run_approval_response` +
+  `approval_events`). Request/response shape not yet probed.
+
+Per `/v1/capabilities`, the runtime is `server_agent` mode with
+`tool_execution: server` (the API server builds a server-side Hermes agent and
+runs tools on the API-server host). Run-related feature flags observed true:
+`run_submission`, `run_status`, `run_events_sse`, `run_stop`,
+`run_approval_response`, `tool_progress_events`, `approval_events`.
+
+#### Create request (POST `/v1/runs`)
+
+The published docs give **no request-body example** — only prose. Per that
+prose, "Runs accept a simple `input` string and optional `session_id`,
+`instructions`, `conversation_history`, or `previous_response_id`." Best-effort
+field list (types/required-ness inferred, **confirm against a running server**):
+
+| Field | Type | Req? | Notes |
+|-------|------|------|-------|
+| `input` | string | required | The user input / prompt for the run. |
+| `session_id` | string | optional | Lets external UIs correlate runs with their own conversation IDs. |
+| `instructions` | string | optional | Custom system guidance, layered atop the core agent prompt. |
+| `conversation_history` | (array?) | optional | Prior context. Shape unconfirmed — likely OpenAI-style messages. |
+| `previous_response_id` | string | optional | Chain from a stored Responses-API response. |
+
+> ⚠️ Field-level detail (exact JSON shape of `conversation_history`, whether
+> `model` is accepted, additional flags) is still **unconfirmed** — the docs
+> show no create example, and only `input` has been exercised so far.
+
+**Observed (2026-05-22, `hermes-test` profile):** `POST /v1/runs` with a body
+of just `{"input":"..."}` succeeds, returning **HTTP `202 Accepted`** and the
+two-field response below. `run_id` is `run_` followed by 32 lowercase hex
+chars (no dashes), e.g. `run_0591466636124693b94936a2314f20e5`. When
+`session_id` is omitted, the poll response reports `session_id` defaulted to
+the `run_id`.
+
+Create response (matches docs; observed verbatim):
+
+```json
+{
+  "run_id": "run_0591466636124693b94936a2314f20e5",
+  "status": "started"
+}
+```
+
+#### Poll response (GET `/v1/runs/{run_id}`)
+
+**Observed (2026-05-22)** — the live server returns more fields than the docs
+example (`created_at`/`updated_at`/`last_event` are undocumented):
+
+```json
+{
+  "object": "hermes.run",
+  "run_id": "run_0591466636124693b94936a2314f20e5",
+  "status": "completed",
+  "updated_at": 1779510798.6846,
+  "created_at": 1779510796.504134,
+  "session_id": "run_0591466636124693b94936a2314f20e5",
+  "model": "hermes-test",
+  "last_event": "run.completed",
+  "output": "hello",
+  "usage": {
+    "input_tokens": 14010,
+    "output_tokens": 1,
+    "total_tokens": 14011
+  }
+}
+```
+
+- `created_at` / `updated_at`: epoch seconds as floats.
+- `model`: the profile name (`hermes-test` here), consistent with `/v1/models`.
+- `last_event`: name of the most recent SSE event (see below), e.g.
+  `run.completed`.
+- `output`: assembled final assistant text once terminal.
+
+#### Status lifecycle
+
+- Non-terminal: `started` (the only non-terminal value seen so far; there may
+  be others like queued/running — confirm on a longer run).
+- Terminal: `completed`, `failed`, `cancelled`.
+- Statuses are retained only **briefly** after terminal for "polling and UI
+  reconciliation," then evicted: a `POST .../stop` against a run that completed
+  seconds earlier already returned `404` (see Stop, below).
+
+#### Events stream (GET `/v1/runs/{run_id}/events`)
+
+SSE stream of the run's tool-call progress, token deltas, and lifecycle events.
+**Observed (2026-05-22)** — frames are plain `data:` JSON (no SSE `event:`
+line, no `[DONE]` sentinel observed); the event type lives in an `"event"`
+field. Every frame carries `event`, `run_id`, and `timestamp` (epoch float).
+Subscribing *after* creation still replayed from the first event, supporting
+the "attach/detach without losing state" design.
+
+Event types seen for a tool-using run (`"Run the shell command: date..."`):
+
+| `event` | Extra fields | Meaning |
+|---------|--------------|---------|
+| `tool.started` | `tool` (e.g. `terminal`), `preview` (e.g. `date`) | Tool invocation begins. |
+| `tool.completed` | `tool`, `duration` (seconds, float), `error` (boolean) | Tool invocation finished. |
+| `message.delta` | `delta` (string chunk) | Incremental assistant text. |
+| `reasoning.available` | `text` (full string) | Reasoning/summary text became available. |
+| `run.completed` | `output` (full string), `usage` (`input_tokens`/`output_tokens`/`total_tokens`) | Terminal event. |
+
+> Not yet observed but likely to exist: a `run.started` head event (the capture
+> attached mid-run), and `run.failed` / error and approval-request events
+> (`approval_events` is advertised). Confirm with longer/failing/approval runs.
+
+#### Stop (POST `/v1/runs/{run_id}/stop`)
+
+Per docs, returns `{"status": "stopping"}` and asks the active agent to stop at
+the next safe interruption point (cooperative, not immediate). **Not yet
+verified on a live in-flight run** (would need a long-running task). Observed
+behavior against an already-completed (evicted) run: **HTTP `404`** with the
+standard error envelope —
+
+```json
+{
+  "error": {
+    "message": "Run not found: run_...",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "run_not_found"
+  }
+}
+```
 
 ### Jobs API (background scheduled work) — note the `/api` prefix, not `/v1`
 - **GET `/api/jobs`** — list scheduled jobs.
