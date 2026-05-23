@@ -150,9 +150,10 @@ example (`created_at`/`updated_at`/`last_event` are undocumented):
   transient `stopping`.
 - Terminal: `completed`, `failed`, `cancelled` — `completed` and `cancelled`
   both observed; `failed` not yet reproduced.
-- Statuses are retained only **briefly** after terminal for "polling and UI
-  reconciliation," then evicted: a `POST .../stop` against a run that completed
-  seconds earlier already returned `404` (see Stop, below).
+- Run records are retained only **briefly** after terminal for "polling and UI
+  reconciliation," then evicted; once evicted, both poll and `stop` return
+  `404 run_not_found`. The status record appears to outlive the event buffer
+  (see Events / Stop below for the observed expiry behavior).
 
 #### Events stream (GET `/v1/runs/{run_id}/events`)
 
@@ -161,13 +162,19 @@ SSE stream of the run's tool-call progress, token deltas, and lifecycle events.
 line, no `[DONE]` sentinel observed); the event type lives in an `"event"`
 field. Every frame carries `event`, `run_id`, and `timestamp` (epoch float).
 Subscribing *after* creation still replayed from the first event, supporting
-the "attach/detach without losing state" design. Replay survives **natural
-completion**: a run polled as `completed` still returns `200` with a full event
-replay during its retention window. **A stopped run is the exception** —
-after a `cancelled` run, the events endpoint returns `404` even though
-`GET /v1/runs/{run_id}` still reports the `cancelled` status (poll → `200`,
-events → `404`). So `stop` appears to tear down the event buffer; completion
-does not.
+the "attach/detach without losing state" design. Replay survives reaching a
+terminal state for **both** `completed` and `cancelled` runs: hitting events
+immediately after a run finished (or was stopped) still returned `200` with a
+full replay.
+
+The `404` from the events endpoint is a **retention-expiry** effect, **not** a
+consequence of `stop` — re-verified 2026-05-23 with no human delay between the
+calls. Right after a run was `cancelled`, events returned `200`; a *second*
+events call seconds later returned `404`. So a run's event buffer is evicted a
+short time after it goes terminal (cancelled-run replay expired within seconds
+here; an earlier `404` had followed a ~1h gap). Treat the events stream as
+available only briefly post-terminal, and don't infer anything about *how* the
+run ended from a `404`.
 
 Event types seen for a tool-using run (`"Run the shell command: date..."`):
 
@@ -177,7 +184,8 @@ Event types seen for a tool-using run (`"Run the shell command: date..."`):
 | `tool.completed` | `tool`, `duration` (seconds, float), `error` (boolean) | Tool invocation finished. |
 | `message.delta` | `delta` (string chunk) | Incremental assistant text. |
 | `reasoning.available` | `text` (full string) | Reasoning/summary text became available. |
-| `run.completed` | `output` (full string), `usage` (`input_tokens`/`output_tokens`/`total_tokens`) | Terminal event. |
+| `run.completed` | `output` (full string), `usage` (`input_tokens`/`output_tokens`/`total_tokens`) | Terminal event (success). |
+| `run.cancelled` | none beyond `event`/`run_id`/`timestamp` | Terminal event after `stop`; carries no `output`/`usage`. When a run is stopped before any tool/text, this is the *only* frame in the replay. |
 
 Further observations (2026-05-22):
 
