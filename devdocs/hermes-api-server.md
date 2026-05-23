@@ -67,10 +67,10 @@ progress tracking via a `run_id` rather than an inline stream.
 - **POST `/v1/runs/{run_id}/approval`** — respond to a tool-approval request
   (human-in-the-loop). **Not on the published docs page**; discovered via
   `GET /v1/capabilities` (`run_approval`/`run_approval_response` +
-  `approval_events`). Request body shape unknown — run-existence is validated
-  **before** body, so a bad `run_id` returns `404 run_not_found` regardless of
-  body; the schema can only be learned against a run actually paused for
-  approval, which `hermes-test` did not produce (see Events, below).
+  `approval_events`). Body is `{"choice": "<once|session|always|deny>"}`; full
+  flow documented under **Approval workflow**, below. (Run-existence is
+  validated **before** the body, so a bad `run_id` returns `404 run_not_found`
+  regardless of body.)
 
 Per `/v1/capabilities`, the runtime is `server_agent` mode with
 `tool_execution: server` (the API server builds a server-side Hermes agent and
@@ -155,7 +155,8 @@ example (`created_at`/`updated_at`/`last_event` are undocumented):
 
 - Non-terminal: `started` (create response) then `running` (observed while the
   agent is working; `last_event` is empty at the very start). `stop` adds a
-  transient `stopping`.
+  transient `stopping`; a gated tool parks the run at `waiting_for_approval`
+  (see Approval workflow).
 - Terminal: `completed`, `failed`, `cancelled` — `completed` and `cancelled`
   both observed; `failed` not yet reproduced.
 - Run records are retained only **briefly** after terminal for "polling and UI
@@ -194,6 +195,8 @@ Event types seen for a tool-using run (`"Run the shell command: date..."`):
 | `reasoning.available` | `text` (full string) | Reasoning/summary text became available. |
 | `run.completed` | `output` (full string), `usage` (`input_tokens`/`output_tokens`/`total_tokens`) | Terminal event (success). |
 | `run.cancelled` | none beyond `event`/`run_id`/`timestamp` | Terminal event after `stop`; carries no `output`/`usage`. When a run is stopped before any tool/text, this is the *only* frame in the replay. |
+| `approval.request` | `command`, `pattern_key`, `pattern_keys[]`, `description`, `choices[]` | Dangerous command gated; run parks at `waiting_for_approval`. See Approval workflow. |
+| `approval.responded` | `choice`, `resolved` | Emitted after a `/approval` response. See Approval workflow. |
 
 Further observations (2026-05-22):
 
@@ -206,12 +209,12 @@ Further observations (2026-05-22):
   failure as normal assistant text and the run still ends with `run.completed`.
   So `run.failed` (if it exists) is reserved for a different failure class
   (model/infra errors) — not reproduced here.
-- **Approval events not reproduced.** `approval_events` /
-  `run_approval_response` are advertised in `/v1/capabilities`, but no approval
-  gate fired under `hermes-test`: the terminal tool ran ungated, and a guessed
-  `"require_approval": true` create field had no effect. Triggering it likely
-  needs a profile with tool-approval configured. The `run.*`/`approval.*`
-  event names and the `/approval` request body remain **unconfirmed**.
+- **Approval events** (`approval.request`, `approval.responded`) fire when a
+  dangerous command is gated — see the **Approval workflow** section below for
+  the full event/request/response shapes. (They only fire when the profile is
+  in `approvals.mode: manual` with a non-container backend and the agent
+  attempts a command matching a dangerous pattern; a benign command runs
+  ungated, which is why earlier benign probes never produced them.)
 
 #### Stop (POST `/v1/runs/{run_id}/stop`)
 
@@ -257,6 +260,77 @@ with the standard error envelope —
   }
 }
 ```
+
+#### Approval workflow (dangerous-command gating)
+
+Human-in-the-loop gating for dangerous tool commands. Server-side mechanism
+(see `/docs/user-guide/security`): when the agent attempts a command matching a
+dangerous pattern (`rm -r`, `mkfs`, `dd if=`, `DROP TABLE`, `> /etc/`,
+`systemctl stop`, `curl | sh`, …) the run **pauses** and asks the caller to
+approve. **Only fires** when the profile's `~/.hermes/config.yaml` has
+`approvals.mode: manual` (not `off`/`smart`), no `--yolo`/`HERMES_YOLO_MODE`,
+and a **non-container backend** (container backends skip the checks). **Verified
+on `hermes-test` (2026-05-23)** with `rm -rf /tmp/...` (matches the pattern; not
+on the always-on hardline blocklist).
+
+Flow (deny path observed end-to-end; approve path pending a live approval):
+
+1. Run is created normally and reaches `running`.
+2. On hitting the gated tool, the run parks at status **`waiting_for_approval`**
+   (`last_event: "approval.request"`). The poll response carries no approval
+   detail beyond that — the detail is in the event stream.
+3. The events stream emits **`approval.request`**:
+
+   ```json
+   {
+     "event": "approval.request",
+     "run_id": "run_...",
+     "timestamp": 1779559698.69,
+     "command": "rm -rf /tmp/hermes_probe_deny1",
+     "pattern_key": "delete in root path",
+     "pattern_keys": ["delete in root path"],
+     "description": "delete in root path",
+     "choices": ["once", "session", "always", "deny"]
+   }
+   ```
+
+   There is **no approval/request id** — the pending approval is keyed by
+   `run_id` (one outstanding approval per run).
+4. Caller responds: **`POST /v1/runs/{run_id}/approval`** with
+   `{"choice": "<once|session|always|deny>"}`. An invalid/absent choice returns
+   `400`:
+
+   ```json
+   { "error": { "message": "Invalid approval choice; expected one of: once, session, always, deny",
+       "type": "invalid_request_error", "param": null, "code": "invalid_approval_choice" } }
+   ```
+
+   A valid choice returns `200`:
+
+   ```json
+   { "object": "hermes.run.approval_response", "run_id": "run_...", "choice": "deny", "resolved": 1 }
+   ```
+
+   `resolved` is the count of pending approvals this call resolved.
+   > ⚠️ `always` writes a **permanent** entry to the profile's
+   > `command_allowlist` (config mutation); `session` auto-approves the pattern
+   > for the rest of the gateway session. Prefer `once`/`deny` when probing.
+5. The stream then emits **`approval.responded`** (`choice`, `resolved`),
+   followed by `tool.completed`.
+
+**Deny outcome:** the run **does not fail** — it ends `completed`.
+`tool.completed` carries `"error": true` (and a `duration` that *includes* the
+time spent waiting for the response), and the agent narrates the abort as normal
+text (e.g. `output: "Understood. I have aborted that action."`).
+
+**No auto-timeout observed:** despite the docs' `approvals.timeout: 60`, a run
+sat `waiting_for_approval` for ~89s until an explicit response, with no
+auto-deny. Treat a gated run as blocking **indefinitely** pending a response;
+the documented timeout does not appear to apply to the API-server run flow.
+
+**Approve path — TODO:** the `once`/`session`/`always` branches (tool actually
+executes, `tool.completed{error:false}`, run resumes to `completed`) are not yet
+captured; needs a live approval, deliberately deferred for safety.
 
 ### Jobs API (background scheduled work) — note the `/api` prefix, not `/v1`
 - **GET `/api/jobs`** — list scheduled jobs.
