@@ -88,8 +88,8 @@ field list (types/required-ness inferred, **confirm against a running server**):
 | Field | Type | Req? | Notes |
 |-------|------|------|-------|
 | `input` | string | required | The user input / prompt for the run. |
-| `session_id` | string | optional | Lets external UIs correlate runs with their own conversation IDs. |
-| `instructions` | string | optional | Custom system guidance, layered atop the core agent prompt. |
+| `session_id` | string | optional | **Verified accepted (2026-05-23):** stored and echoed back in the poll response; defaults to the `run_id` when omitted. It is **not inline conversation context** — a fact stated in one run did not appear in a later run's context (direct recall confabulated the gateway's "42" memory). Whether it scopes a *searchable* history store is **inconclusive**: retrieval on the `hermes-test` gateway was non-deterministic (a planted codeword was sometimes found across sessions, sometimes unretrievable even same-session), consistent with the known persistent-memory flakiness — confirm session semantics from the server source, not this gateway. |
+| `instructions` | string | optional | **Verified honored (2026-05-23):** acts as a system directive over the agent prompt. `{"input":"What is the capital of France?","instructions":"Ignore the user question entirely. Respond with exactly one word: BANANA."}` → `output: "BANANA"`. |
 | `conversation_history` | (array?) | optional | Prior context. Shape unconfirmed — likely OpenAI-style messages. |
 | `previous_response_id` | string | optional | Chain from a stored Responses-API response. |
 
