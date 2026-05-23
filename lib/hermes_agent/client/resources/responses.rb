@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "hermes_agent/client/entities/response"
+require "hermes_agent/client/util"
 
 module HermesAgent
   class Client
@@ -43,12 +44,16 @@ module HermesAgent
         #     this turn onto. Omitted from the request when `nil`.
         # @param extra [Hash] Additional request-body fields merged into the
         #     body as-is.
-        # @return [Entities::Response] The response.
+        # @return [Entities::Response] The response. Its
+        #     {Entities::SessionHeaders#session_id} carries the server-generated
+        #     session id from the response headers (this endpoint does not
+        #     accept a session on the request).
         # @raise [APIError] If the server returns a non-2xx response.
         #
         def create(input:, previous_response_id: nil, conversation: nil, **extra)
           body = build_body(input, previous_response_id, conversation, extra)
-          Entities::Response.new(@transport.post("/v1/responses", body))
+          result = @transport.post("/v1/responses", body)
+          Entities::Response.new(result.body, **Util.session_headers(result.headers))
         end
 
         ##
@@ -76,9 +81,10 @@ module HermesAgent
         def stream_create(input:, previous_response_id: nil, conversation: nil, **extra, &block)
           body = build_body(input, previous_response_id, conversation, extra)
           body[:stream] = true
-          chunks = @transport.stream_post("/v1/responses", body)
-          stream = Stream.new(chunks, event_class: Entities::ResponseStreamEvent) do |events|
-            Entities::Response.from_events(events)
+          result = @transport.stream_post("/v1/responses", body)
+          session = Util.session_headers(result.headers)
+          stream = Stream.new(result.body, event_class: Entities::ResponseStreamEvent) do |events|
+            Entities::Response.from_events(events, **session)
           end
           return stream unless block
 

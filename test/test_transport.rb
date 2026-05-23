@@ -58,12 +58,32 @@ describe ::HermesAgent::Client::Transport do
     end
   end
 
-  it "posts a JSON body and parses the JSON response" do
+  it "posts a JSON body and parses the JSON response into a Result body" do
     stub = stub_request(:post, "https://example.test/v1/chat/completions")
            .with(headers: {"Content-Type" => %r{application/json}}, body: '{"messages":[]}')
            .to_return(status: 200, body: '{"object":"chat.completion"}')
     result = transport(base_url: "https://example.test").post("/v1/chat/completions", {messages: []})
-    assert_equal({"object" => "chat.completion"}, result)
+    assert_equal({"object" => "chat.completion"}, result.body)
+    assert_requested(stub)
+  end
+
+  it "exposes response headers (downcased keys) on the post Result" do
+    stub_request(:post, "https://example.test/v1/chat/completions")
+      .to_return(status: 200, body: "{}",
+                 headers: {"X-Hermes-Session-ID" => "sid-1", "X-Hermes-Session-Key" => "skey-1"})
+    result = transport(base_url: "https://example.test").post("/v1/chat/completions", {messages: []})
+    assert_equal("sid-1", result.headers["x-hermes-session-id"])
+    assert_equal("skey-1", result.headers["x-hermes-session-key"])
+  end
+
+  it "sends request headers passed to post" do
+    stub = stub_request(:post, "https://example.test/v1/chat/completions")
+           .with(headers: {"X-Hermes-Session-ID" => "sid-1", "X-Hermes-Session-Key" => "skey-1"})
+           .to_return(status: 200, body: "{}")
+    transport(base_url: "https://example.test").post(
+      "/v1/chat/completions", {messages: []},
+      headers: {"X-Hermes-Session-ID" => "sid-1", "X-Hermes-Session-Key" => "skey-1"}
+    )
     assert_requested(stub)
   end
 
@@ -84,11 +104,18 @@ describe ::HermesAgent::Client::Transport do
     assert_equal("Invalid API key", error.message)
   end
 
-  it "stream_post returns a body that yields the response chunks" do
+  it "stream_post returns a Result whose body yields the response chunks" do
     stub_request(:post, "https://example.test/v1/chat/completions")
       .to_return(status: 200, body: "data: {\"n\":1}\n\n")
-    body = transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
-    assert_equal("data: {\"n\":1}\n\n", body.to_a.join)
+    result = transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
+    assert_equal("data: {\"n\":1}\n\n", result.body.to_a.join)
+  end
+
+  it "exposes response headers on the stream_post Result" do
+    stub_request(:post, "https://example.test/v1/chat/completions")
+      .to_return(status: 200, body: "data: {}\n\n", headers: {"X-Hermes-Session-ID" => "sid-1"})
+    result = transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
+    assert_equal("sid-1", result.headers["x-hermes-session-id"])
   end
 
   it "stream_post raises a status-mapped APIError before streaming on an error response" do
@@ -139,28 +166,29 @@ describe ::HermesAgent::Client::Transport do
     response = Object.new
     response.define_singleton_method(:status) { status }
     response.define_singleton_method(:body) { body }
+    response.define_singleton_method(:headers) { {} }
     http_client = Object.new
     http_client.define_singleton_method(:post) { |*_args, **_kwargs| response }
     result = transport(base_url: "https://example.test")
-    result.define_singleton_method(:client) { http_client }
+    result.define_singleton_method(:client) { |**| http_client }
     result
   end
 
   it "maps a mid-stream read timeout to TimeoutError" do
     tr = streaming_transport(["data: {}\n\n"], raise_error: ::HTTP::TimeoutError.new("read timed out"))
-    stream = tr.stream_post("/v1/responses", {})
+    stream = tr.stream_post("/v1/responses", {}).body
     assert_raises(::HermesAgent::Client::TimeoutError) { stream.each { |_chunk| nil } }
   end
 
   it "maps a mid-stream connection failure to ConnectionError" do
     tr = streaming_transport([], raise_error: ::HTTP::ConnectionError.new("body ended prematurely"))
-    stream = tr.stream_post("/v1/responses", {})
+    stream = tr.stream_post("/v1/responses", {}).body
     assert_raises(::HermesAgent::Client::ConnectionError) { stream.each { |_chunk| nil } }
   end
 
   it "yields the chunks received before a mid-stream failure" do
     tr = streaming_transport(["a", "b"], raise_error: ::HTTP::TimeoutError.new("boom"))
-    stream = tr.stream_post("/v1/responses", {})
+    stream = tr.stream_post("/v1/responses", {}).body
     received = []
     assert_raises(::HermesAgent::Client::TimeoutError) do
       stream.each { |chunk| received << chunk }

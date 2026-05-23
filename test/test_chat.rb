@@ -112,6 +112,44 @@ describe ::HermesAgent::Client::Entities::ChatCompletion do
   end
 end
 
+describe "ChatCompletion session headers" do
+  payload = {"object" => "chat.completion"}
+
+  it "exposes session_id and session_key supplied from response headers" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.new(
+      payload, session_id: "sid-1", session_key: "skey-1"
+    )
+    assert_equal("sid-1", completion.session_id)
+    assert_equal("skey-1", completion.session_key)
+  end
+
+  it "defaults the session readers to nil" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.new(payload)
+    assert_nil(completion.session_id)
+    assert_nil(completion.session_key)
+  end
+
+  it "keeps the session values out of the body payload (to_h)" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.new(
+      payload, session_id: "sid-1", session_key: "skey-1"
+    )
+    assert_equal(payload, completion.to_h)
+    refute(completion.to_h.key?("session_id"))
+    refute(completion.to_h.key?("session_key"))
+  end
+
+  it "factors the session values into equality and hash" do
+    base = ::HermesAgent::Client::Entities::ChatCompletion.new(payload, session_id: "s", session_key: "k")
+    same = ::HermesAgent::Client::Entities::ChatCompletion.new(payload, session_id: "s", session_key: "k")
+    diff_id = ::HermesAgent::Client::Entities::ChatCompletion.new(payload, session_id: "other", session_key: "k")
+    body_only = ::HermesAgent::Client::Entities::ChatCompletion.new(payload)
+    assert_equal(base, same)
+    assert_equal(base.hash, same.hash)
+    refute_equal(base, diff_id)
+    refute_equal(base, body_only)
+  end
+end
+
 describe ::HermesAgent::Client::Entities::ChatCompletionChunk do
   let(:role_chunk) do
     {
@@ -263,6 +301,14 @@ describe "ChatCompletion.from_chunks" do
     assert_equal("", completion.choices.first.message.content)
   end
 
+  it "carries session headers passed to it onto the assembled completion" do
+    completion = ::HermesAgent::Client::Entities::ChatCompletion.from_chunks(
+      chunks, session_id: "sid-1", session_key: "skey-1"
+    )
+    assert_equal("sid-1", completion.session_id)
+    assert_equal("skey-1", completion.session_key)
+  end
+
   it "ignores non-chunk events such as ChatToolProgress when assembling" do
     mixed = [
       ::HermesAgent::Client::Entities::ChatToolProgress.new("tool" => "search_files", "status" => "running"),
@@ -409,6 +455,50 @@ describe "Resources::Chat#stream_create with tool progress" do
   end
 end
 
+describe "Resources::Chat session headers" do
+  let(:messages) { [{role: "user", content: "hello"}] }
+
+  it "sends session_id and session_key as request headers on #create" do
+    transport = ::HermesAgent::Tests::FakeTransport.new("object" => "chat.completion")
+    ::HermesAgent::Client::Resources::Chat.new(transport).create(
+      messages: messages, session_id: "sid-1", session_key: "skey-1"
+    )
+    assert_equal("sid-1", transport.requested_headers["X-Hermes-Session-ID"])
+    assert_equal("skey-1", transport.requested_headers["X-Hermes-Session-Key"])
+  end
+
+  it "omits session request headers when neither is given" do
+    transport = ::HermesAgent::Tests::FakeTransport.new("object" => "chat.completion")
+    ::HermesAgent::Client::Resources::Chat.new(transport).create(messages: messages)
+    assert(transport.requested_headers.nil? || transport.requested_headers.empty?)
+  end
+
+  it "reads the response session headers onto the completion from #create" do
+    transport = ::HermesAgent::Tests::FakeTransport.new(
+      {"object" => "chat.completion"}, [],
+      {"x-hermes-session-id" => "sid-2", "x-hermes-session-key" => "skey-2"}
+    )
+    completion = ::HermesAgent::Client::Resources::Chat.new(transport).create(messages: messages)
+    assert_equal("sid-2", completion.session_id)
+    assert_equal("skey-2", completion.session_key)
+  end
+
+  it "sends session headers and carries response session headers onto the assembled stream completion" do
+    chunks = [
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\"," \
+      "\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"}," \
+      "\"finish_reason\":\"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+    ]
+    transport = ::HermesAgent::Tests::FakeTransport.new({}, chunks, {"x-hermes-session-id" => "sid-3"})
+    completion = ::HermesAgent::Client::Resources::Chat.new(transport).stream_create(
+      messages: messages, session_id: "sid-3"
+    ).result
+    assert_equal("sid-3", transport.requested_headers["X-Hermes-Session-ID"])
+    assert_equal("sid-3", completion.session_id)
+  end
+end
+
 describe "chat" do
   integration_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
 
@@ -463,6 +553,33 @@ describe "chat" do
       assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
       refute_empty(chunks)
       refute_empty(completion.choices.first.message.content)
+    end
+
+    it "returns a server-generated session id and no session key when none is sent" do
+      completion = client.chat.create(messages: [{role: "user", content: "Say hello."}])
+      refute_nil(completion.session_id, "expected the server to generate a session id")
+      refute_empty(completion.session_id)
+      assert_nil(completion.session_key, "expected no session key when none was sent")
+    end
+
+    it "echoes the supplied session_id and session_key back on the completion" do
+      session_id = "sid-#{::SecureRandom.hex(8)}"
+      session_key = "skey-#{::SecureRandom.hex(8)}"
+      completion = client.chat.create(
+        messages: [{role: "user", content: "Say hello."}],
+        session_id: session_id, session_key: session_key
+      )
+      assert_equal(session_id, completion.session_id)
+      assert_equal(session_key, completion.session_key)
+    end
+
+    it "carries the session id onto the assembled completion when streaming" do
+      session_id = "sid-#{::SecureRandom.hex(8)}"
+      completion = client.chat.stream_create(
+        messages: [{role: "user", content: "Count: one two three"}],
+        session_id: session_id
+      ) { |_event| nil }
+      assert_equal(session_id, completion.session_id)
     end
   end
 end

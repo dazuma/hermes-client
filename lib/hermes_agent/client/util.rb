@@ -12,6 +12,30 @@ module HermesAgent
     #
     module Util
       ##
+      # The downcased response-header name carrying the session id.
+      #
+      SESSION_ID_HEADER = "x-hermes-session-id"
+
+      ##
+      # The downcased response-header name carrying the session key.
+      #
+      SESSION_KEY_HEADER = "x-hermes-session-key"
+
+      ##
+      # Extract the session-continuity values from a normalized (downcased-key)
+      # response-header hash into the keyword form the session-bearing entities
+      # ({Entities::ChatCompletion}, {Entities::Response}) accept. Either value
+      # is `nil` when the corresponding header is absent.
+      #
+      # @param headers [Hash{String=>String}] Response headers, keyed by
+      #     downcased name (as produced by {Transport}).
+      # @return [Hash{Symbol=>(String, nil)}] `{session_id:, session_key:}`.
+      #
+      def self.session_headers(headers)
+        {session_id: headers[SESSION_ID_HEADER], session_key: headers[SESSION_KEY_HEADER]}
+      end
+
+      ##
       # Parse JSON from a payload the client expected to be JSON, mapping a
       # parse failure to {MalformedResponseError} so a raw `JSON::ParserError`
       # never leaks out. Shared by the non-streaming ({Transport#handle}) and

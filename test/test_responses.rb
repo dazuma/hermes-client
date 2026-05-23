@@ -304,6 +304,39 @@ describe ::HermesAgent::Client::Entities::ResponseStreamEvent do
   end
 end
 
+describe "Response session headers" do
+  payload = {"id" => "resp_1", "object" => "response"}
+
+  it "exposes session_id and session_key supplied from response headers" do
+    response = ::HermesAgent::Client::Entities::Response.new(payload, session_id: "sid-1", session_key: "skey-1")
+    assert_equal("sid-1", response.session_id)
+    assert_equal("skey-1", response.session_key)
+  end
+
+  it "defaults the session readers to nil" do
+    response = ::HermesAgent::Client::Entities::Response.new(payload)
+    assert_nil(response.session_id)
+    assert_nil(response.session_key)
+  end
+
+  it "keeps the session values out of the body payload (to_h)" do
+    response = ::HermesAgent::Client::Entities::Response.new(payload, session_id: "sid-1", session_key: "skey-1")
+    assert_equal(payload, response.to_h)
+    refute(response.to_h.key?("session_id"))
+  end
+
+  it "factors the session values into equality and hash" do
+    base = ::HermesAgent::Client::Entities::Response.new(payload, session_id: "s", session_key: "k")
+    same = ::HermesAgent::Client::Entities::Response.new(payload, session_id: "s", session_key: "k")
+    diff_id = ::HermesAgent::Client::Entities::Response.new(payload, session_id: "other", session_key: "k")
+    body_only = ::HermesAgent::Client::Entities::Response.new(payload)
+    assert_equal(base, same)
+    assert_equal(base.hash, same.hash)
+    refute_equal(base, diff_id)
+    refute_equal(base, body_only)
+  end
+end
+
 describe "Response.from_events" do
   let(:events) do
     [
@@ -334,6 +367,12 @@ describe "Response.from_events" do
     response = ::HermesAgent::Client::Entities::Response.from_events(bare)
     assert_instance_of(::HermesAgent::Client::Entities::Response, response)
     assert_nil(response.id)
+  end
+
+  it "carries session headers passed to it onto the assembled response" do
+    response = ::HermesAgent::Client::Entities::Response.from_events(events, session_id: "sid-1", session_key: "skey-1")
+    assert_equal("sid-1", response.session_id)
+    assert_equal("skey-1", response.session_key)
   end
 end
 
@@ -390,6 +429,26 @@ describe ::HermesAgent::Client::Resources::Responses do
     assert_instance_of(::HermesAgent::Client::Entities::Response, response)
   end
 
+  it "reads the response session headers onto the created response" do
+    sourced = ::HermesAgent::Tests::FakeTransport.new(
+      {"id" => "resp_1", "object" => "response"}, [], {"x-hermes-session-id" => "sid-3"}
+    )
+    response = ::HermesAgent::Client::Resources::Responses.new(sourced).create(input: "hi")
+    assert_equal("sid-3", response.session_id)
+    assert_nil(response.session_key)
+  end
+
+  it "does not send session request headers (responses ignores them)" do
+    ::HermesAgent::Client::Resources::Responses.new(transport).create(input: "hi")
+    assert(transport.requested_headers.nil? || transport.requested_headers.empty?)
+  end
+
+  it "leaves session readers nil on a retrieved response (GET returns no session headers)" do
+    response = ::HermesAgent::Client::Resources::Responses.new(transport).get("resp_1")
+    assert_nil(response.session_id)
+    assert_nil(response.session_key)
+  end
+
   it "deletes a response by id and wraps the result in a ResponseDeletion entity" do
     deleter = ::HermesAgent::Tests::FakeTransport.new("id" => "resp_1", "object" => "response", "deleted" => true)
     deletion = ::HermesAgent::Client::Resources::Responses.new(deleter).delete("resp_1")
@@ -433,6 +492,12 @@ describe "Resources::Responses#stream_create" do
     resource.stream_create(input: "hi", previous_response_id: "resp_0", conversation: "c1").result
     assert_equal("resp_0", transport.requested_body[:previous_response_id])
     assert_equal("c1", transport.requested_body[:conversation])
+  end
+
+  it "carries response session headers onto the assembled response" do
+    sourced = ::HermesAgent::Tests::FakeTransport.new({}, stream_chunks, {"x-hermes-session-id" => "sid-s"})
+    response = ::HermesAgent::Client::Resources::Responses.new(sourced).stream_create(input: "hi").result
+    assert_equal("sid-s", response.session_id)
   end
 
   it "yields ResponseStreamEvent events and returns the assembled Response (block form)" do

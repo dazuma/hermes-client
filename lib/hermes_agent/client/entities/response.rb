@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "hermes_agent/client/entity"
+require "hermes_agent/client/entities/session_headers"
 
 module HermesAgent
   class Client
@@ -196,6 +197,8 @@ module HermesAgent
       # best-effort; {#to_h} remains the source of truth.
       #
       class Response < Entity
+        include SessionHeaders
+
         ##
         # Build a {Response} from a streamed turn's events. The terminal
         # `response.completed` event carries the full final response object, so
@@ -206,15 +209,19 @@ module HermesAgent
         #
         # @param events [Array<ResponseStreamEvent>] The streamed events, in
         #     order.
+        # @param session_id [String, nil] The session id from the response
+        #     headers, carried onto the assembled response.
+        # @param session_key [String, nil] The session key from the response
+        #     headers, carried onto the assembled response.
         # @return [Response]
         #
-        def self.from_events(events)
+        def self.from_events(events, session_id: nil, session_key: nil)
           payload = {}
           events.each do |event|
             raw = event["response"]
             payload = raw if raw.is_a?(::Hash)
           end
-          new(payload)
+          new(payload, session_id: session_id, session_key: session_key)
         end
 
         ##

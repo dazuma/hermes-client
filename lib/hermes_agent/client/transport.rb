@@ -20,6 +20,22 @@ module HermesAgent
     #
     class Transport
       ##
+      # The outcome of a request whose response headers matter to the caller:
+      # the parsed body — or, for a streaming request, the live chunk
+      # enumerator — paired with the response headers as a Hash with downcased
+      # string keys. Returned by {#post} and {#stream_post}; the header-agnostic
+      # {#get} and {#delete} return the bare parsed body instead.
+      #
+      # @!attribute [r] body
+      #   @return [Hash, Enumerator] The parsed JSON body, or the chunk
+      #       enumerator for a streaming request.
+      # @!attribute [r] headers
+      #   @return [Hash{String=>String}] The response headers, keyed by
+      #       downcased name.
+      #
+      Result = ::Data.define(:body, :headers)
+
+      ##
       # Create a transport.
       #
       # @param config [Configuration] The connection settings to use.
@@ -48,12 +64,14 @@ module HermesAgent
       #     `/v1` (resources own their prefixes).
       # @param body [Hash] The request body, serialized to JSON. The
       #     `Content-Type: application/json` header is set automatically.
-      # @return [Hash] The parsed response body, with string keys.
+      # @param headers [Hash, nil] Extra request headers to send, merged over
+      #     the defaults (e.g. the session-continuity headers).
+      # @return [Result] The parsed response body and the response headers.
       # @raise [APIError] If the server returns a non-2xx response.
       #
-      def post(path, body)
-        response = request { client.post(url_for(path), json: body) }
-        handle(response)
+      def post(path, body, headers: nil)
+        response = request { client(extra_headers: headers).post(url_for(path), json: body) }
+        Result.new(body: handle(response), headers: normalize_headers(response.headers))
       end
 
       ##
@@ -77,17 +95,20 @@ module HermesAgent
       #
       # @param path [String] The request path, including its prefix.
       # @param body [Hash] The request body, serialized to JSON.
-      # @return [HTTP::Response::Body] The live response body; iterate it with
-      #     `#each` to read byte chunks as they arrive.
+      # @param headers [Hash, nil] Extra request headers to send, merged over
+      #     the defaults (e.g. the session-continuity headers).
+      # @return [Result] The live chunk enumerator (as `body`) and the response
+      #     headers. Iterate `body` with `#each` to read byte chunks as they
+      #     arrive.
       # @raise [APIError] If the server returns a non-2xx response.
       #
-      def stream_post(path, body)
-        response = request { client.post(url_for(path), json: body) }
+      def stream_post(path, body, headers: nil)
+        response = request { client(extra_headers: headers).post(url_for(path), json: body) }
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: response.body.to_s,
                                        headers: response.headers.to_h)
         end
-        map_stream_errors(response.body)
+        Result.new(body: map_stream_errors(response.body), headers: normalize_headers(response.headers))
       end
 
       private
@@ -132,15 +153,32 @@ module HermesAgent
       end
 
       ##
+      # @param extra_headers [Hash, nil] Per-request headers merged over the
+      #     defaults.
       # @return [HTTP::Client] A configured `http` client with auth and
       #     timeouts applied.
       #
-      def client
-        result = ::HTTP.headers(default_headers)
+      def client(extra_headers: nil)
+        headers = extra_headers ? default_headers.merge(extra_headers) : default_headers
+        result = ::HTTP.headers(headers)
         if @config.timeout || @config.open_timeout
           result = result.timeout(read: @config.timeout, connect: @config.open_timeout)
         end
         result
+      end
+
+      ##
+      # Normalize response headers to a plain Hash keyed by downcased name,
+      # keeping the layers above {Transport} free of the `http` gem's header
+      # type. Repeated headers collapse to their first value.
+      #
+      # @param headers [#to_h] The response headers.
+      # @return [Hash{String=>String}]
+      #
+      def normalize_headers(headers)
+        headers.to_h.each_with_object({}) do |(name, value), result|
+          result[name.to_s.downcase] = value.is_a?(::Array) ? value.first : value
+        end
       end
 
       ##

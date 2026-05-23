@@ -62,12 +62,15 @@ module HermesAgent
     end
 
     # A stand-in for Transport in unit tests: it records the path (and, for
-    # #post, the body) it was asked for and returns a canned payload instead of
-    # making a real HTTP request.
+    # #post, the body and headers) it was asked for and returns a canned
+    # payload instead of making a real HTTP request. #post and #stream_post
+    # return a Transport::Result wrapping the canned body/chunks and the canned
+    # response headers, mirroring the real transport.
     class FakeTransport
-      def initialize(response = {}, stream_chunks = [])
+      def initialize(response = {}, stream_chunks = [], response_headers = {})
         @response = response
         @stream_chunks = stream_chunks
+        @response_headers = response_headers
       end
 
       # The path passed to the most recent request.
@@ -76,15 +79,19 @@ module HermesAgent
       # The body passed to the most recent #post / #stream_post call.
       attr_reader :requested_body
 
+      # The headers passed to the most recent #post / #stream_post call.
+      attr_reader :requested_headers
+
       def get(path)
         @requested_path = path
         @response
       end
 
-      def post(path, body)
+      def post(path, body, headers: nil)
         @requested_path = path
         @requested_body = body
-        @response
+        @requested_headers = headers
+        result(@response)
       end
 
       def delete(path)
@@ -92,10 +99,17 @@ module HermesAgent
         @response
       end
 
-      def stream_post(path, body)
+      def stream_post(path, body, headers: nil)
         @requested_path = path
         @requested_body = body
-        @stream_chunks
+        @requested_headers = headers
+        result(@stream_chunks)
+      end
+
+      private
+
+      def result(body)
+        ::HermesAgent::Client::Transport::Result.new(body: body, headers: @response_headers)
       end
     end
   end

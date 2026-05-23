@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "hermes_agent/client/entity"
+require "hermes_agent/client/entities/session_headers"
 
 module HermesAgent
   class Client
@@ -267,6 +268,8 @@ module HermesAgent
       # Field readers are best-effort; {#to_h} remains the source of truth.
       #
       class ChatCompletion < Entity
+        include SessionHeaders
+
         ##
         # Reconstruct a completion from the events of a streamed turn. Chat
         # streaming does not send a final aggregate object, so this assembles
@@ -278,9 +281,13 @@ module HermesAgent
         #
         # @param events [Array<Entity>] The streamed events, in order; only
         #     {ChatCompletionChunk}s contribute to the result.
+        # @param session_id [String, nil] The session id from the response
+        #     headers, carried onto the assembled completion.
+        # @param session_key [String, nil] The session key from the response
+        #     headers, carried onto the assembled completion.
         # @return [ChatCompletion]
         #
-        def self.from_chunks(events)
+        def self.from_chunks(events, session_id: nil, session_key: nil)
           chunks = events.select { |event| event.is_a?(ChatCompletionChunk) }
           first = chunks.empty? ? {} : chunks.first.to_h
           content = +""
@@ -294,12 +301,13 @@ module HermesAgent
             usage = chunk["usage"] if chunk["usage"]
           end
           new(
-            "id" => first["id"], "object" => "chat.completion",
-            "created" => first["created"], "model" => first["model"],
-            "choices" => [{"index" => 0,
-                           "message" => {"role" => role, "content" => content},
-                           "finish_reason" => finish_reason}],
-            "usage" => usage
+            {"id" => first["id"], "object" => "chat.completion",
+             "created" => first["created"], "model" => first["model"],
+             "choices" => [{"index" => 0,
+                            "message" => {"role" => role, "content" => content},
+                            "finish_reason" => finish_reason}],
+             "usage" => usage},
+            session_id: session_id, session_key: session_key
           )
         end
 
