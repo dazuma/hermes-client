@@ -67,7 +67,10 @@ progress tracking via a `run_id` rather than an inline stream.
 - **POST `/v1/runs/{run_id}/approval`** — respond to a tool-approval request
   (human-in-the-loop). **Not on the published docs page**; discovered via
   `GET /v1/capabilities` (`run_approval`/`run_approval_response` +
-  `approval_events`). Request/response shape not yet probed.
+  `approval_events`). Request body shape unknown — run-existence is validated
+  **before** body, so a bad `run_id` returns `404 run_not_found` regardless of
+  body; the schema can only be learned against a run actually paused for
+  approval, which `hermes-test` did not produce (see Events, below).
 
 Per `/v1/capabilities`, the runtime is `server_agent` mode with
 `tool_execution: server` (the API server builds a server-side Hermes agent and
@@ -168,9 +171,23 @@ Event types seen for a tool-using run (`"Run the shell command: date..."`):
 | `reasoning.available` | `text` (full string) | Reasoning/summary text became available. |
 | `run.completed` | `output` (full string), `usage` (`input_tokens`/`output_tokens`/`total_tokens`) | Terminal event. |
 
-> Not yet observed but likely to exist: a `run.started` head event (the capture
-> attached mid-run), and `run.failed` / error and approval-request events
-> (`approval_events` is advertised). Confirm with longer/failing/approval runs.
+Further observations (2026-05-22):
+
+- **No `run.started` event.** Three separate runs (plain text, tool, failing
+  tool) all began the stream at the first content event (`message.delta` or
+  `tool.started`) — there is no lifecycle "start" frame; the create response's
+  `status:"started"` is the only start signal.
+- **Tool failures do not fail the run.** A command that exits non-zero produces
+  `tool.completed` with `"error": true`, after which the agent narrates the
+  failure as normal assistant text and the run still ends with `run.completed`.
+  So `run.failed` (if it exists) is reserved for a different failure class
+  (model/infra errors) — not reproduced here.
+- **Approval events not reproduced.** `approval_events` /
+  `run_approval_response` are advertised in `/v1/capabilities`, but no approval
+  gate fired under `hermes-test`: the terminal tool ran ungated, and a guessed
+  `"require_approval": true` create field had no effect. Triggering it likely
+  needs a profile with tool-approval configured. The `run.*`/`approval.*`
+  event names and the `/approval` request body remain **unconfirmed**.
 
 #### Stop (POST `/v1/runs/{run_id}/stop`)
 
