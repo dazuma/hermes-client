@@ -145,9 +145,11 @@ example (`created_at`/`updated_at`/`last_event` are undocumented):
 
 #### Status lifecycle
 
-- Non-terminal: `started` (the only non-terminal value seen so far; there may
-  be others like queued/running — confirm on a longer run).
-- Terminal: `completed`, `failed`, `cancelled`.
+- Non-terminal: `started` (create response) then `running` (observed while the
+  agent is working; `last_event` is empty at the very start). `stop` adds a
+  transient `stopping`.
+- Terminal: `completed`, `failed`, `cancelled` — `completed` and `cancelled`
+  both observed; `failed` not yet reproduced.
 - Statuses are retained only **briefly** after terminal for "polling and UI
   reconciliation," then evicted: a `POST .../stop` against a run that completed
   seconds earlier already returned `404` (see Stop, below).
@@ -159,7 +161,13 @@ SSE stream of the run's tool-call progress, token deltas, and lifecycle events.
 line, no `[DONE]` sentinel observed); the event type lives in an `"event"`
 field. Every frame carries `event`, `run_id`, and `timestamp` (epoch float).
 Subscribing *after* creation still replayed from the first event, supporting
-the "attach/detach without losing state" design.
+the "attach/detach without losing state" design. Replay survives **natural
+completion**: a run polled as `completed` still returns `200` with a full event
+replay during its retention window. **A stopped run is the exception** —
+after a `cancelled` run, the events endpoint returns `404` even though
+`GET /v1/runs/{run_id}` still reports the `cancelled` status (poll → `200`,
+events → `404`). So `stop` appears to tear down the event buffer; completion
+does not.
 
 Event types seen for a tool-using run (`"Run the shell command: date..."`):
 
@@ -191,11 +199,37 @@ Further observations (2026-05-22):
 
 #### Stop (POST `/v1/runs/{run_id}/stop`)
 
-Per docs, returns `{"status": "stopping"}` and asks the active agent to stop at
-the next safe interruption point (cooperative, not immediate). **Not yet
-verified on a live in-flight run** (would need a long-running task). Observed
-behavior against an already-completed (evicted) run: **HTTP `404`** with the
-standard error envelope —
+Asks the active agent to stop at the next safe interruption point (cooperative,
+not immediate). **Observed live (2026-05-22)** against a run mid-`sleep`:
+returns **HTTP `200`** with a `run_id` the docs omit —
+
+```json
+{
+  "run_id": "run_bb7e33a7d5624b6cba4ffe34589ccf6d",
+  "status": "stopping"
+}
+```
+
+The run then resolves to terminal `status: "cancelled"` (`last_event:
+"run.cancelled"`). The cancelled poll response **omits `output` and `usage`**
+(both present on a `completed` run) — a client must not assume those fields
+exist on a non-`completed` terminal run:
+
+```json
+{
+  "object": "hermes.run",
+  "run_id": "run_bb7e33a7d5624b6cba4ffe34589ccf6d",
+  "status": "cancelled",
+  "updated_at": 1779513114.1700091,
+  "created_at": 1779513113.790261,
+  "session_id": "run_bb7e33a7d5624b6cba4ffe34589ccf6d",
+  "model": "hermes-test",
+  "last_event": "run.cancelled"
+}
+```
+
+Against an already-completed (evicted) run, stop instead returns **HTTP `404`**
+with the standard error envelope —
 
 ```json
 {
