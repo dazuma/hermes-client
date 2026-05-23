@@ -328,9 +328,17 @@ sat `waiting_for_approval` for ~89s until an explicit response, with no
 auto-deny. Treat a gated run as blocking **indefinitely** pending a response;
 the documented timeout does not appear to apply to the API-server run flow.
 
-**Approve path — TODO:** the `once`/`session`/`always` branches (tool actually
-executes, `tool.completed{error:false}`, run resumes to `completed`) are not yet
-captured; needs a live approval, deliberately deferred for safety.
+**Approve outcome (verified 2026-05-23 with `choice: "once"`):** the gated tool
+**executes** and the run resumes to `completed`. The only on-the-wire difference
+from deny is `tool.completed` carrying **`"error": false`** (deny → `true`); the
+agent then proceeds normally (e.g. `output: "OK."`) instead of narrating an
+abort. Full sequence: `tool.started` → `approval.request` →
+`approval.responded` (`choice:"once"`) → `tool.completed` (`error:false`) →
+`message.delta`/`reasoning.available` → `run.completed`. The `/approval`
+response is the same `hermes.run.approval_response` shape, with the echoed
+`choice`. (Only `once` and `deny` were exercised; `session`/`always` were
+deliberately skipped for their session/config side effects, but the server
+accepts all four as valid choices.)
 
 ### Jobs API (background scheduled work) — note the `/api` prefix, not `/v1`
 - **GET `/api/jobs`** — list scheduled jobs.
