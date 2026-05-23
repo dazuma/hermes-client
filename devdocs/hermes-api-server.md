@@ -90,12 +90,20 @@ field list (types/required-ness inferred, **confirm against a running server**):
 | `input` | string | required | The user input / prompt for the run. |
 | `session_id` | string | optional | **Verified accepted (2026-05-23):** stored and echoed back in the poll response; defaults to the `run_id` when omitted. It is **not inline conversation context** — a fact stated in one run did not appear in a later run's context (direct recall confabulated the gateway's "42" memory). Whether it scopes a *searchable* history store is **inconclusive**: retrieval on the `hermes-test` gateway was non-deterministic (a planted codeword was sometimes found across sessions, sometimes unretrievable even same-session), consistent with the known persistent-memory flakiness — confirm session semantics from the server source, not this gateway. |
 | `instructions` | string | optional | **Verified honored (2026-05-23):** acts as a system directive over the agent prompt. `{"input":"What is the capital of France?","instructions":"Ignore the user question entirely. Respond with exactly one word: BANANA."}` → `output: "BANANA"`. |
-| `conversation_history` | (array?) | optional | Prior context. Shape unconfirmed — likely OpenAI-style messages. |
+| `conversation_history` | array of message objects | optional | **Verified (2026-05-23):** an OpenAI-style messages array (`[{"role":"user","content":"…"},{"role":"assistant","content":"…"}]`) is accepted and **loaded into context** — a ~1.5k-token history raised the run's `input_tokens` from the ~14008 baseline to 15533. **Validated** (unlike `previous_response_id`): a non-array value returns `400` `"'conversation_history' must be an array of message objects"`. |
 | `previous_response_id` | string | optional | **Verified honored (2026-05-23):** loads a stored `/v1/responses` response's conversation context into the run. Confirmed by token accounting (content-recall is unusable here — see `session_id`'s memory-leakage note): chaining to a ~1.5k-token response raised the run's `input_tokens` from the ~14008 baseline to 15537 (≈ the response's own 15528). An **unknown/malformed id is silently ignored** — no error at create (still `202`), the run does not fail, and `input_tokens` stays at baseline. Validation appears to be value-tolerant load-if-present. |
 
-> ⚠️ Field-level detail (exact JSON shape of `conversation_history`, whether
-> `model` is accepted, additional flags) is still **unconfirmed** — the docs
-> show no create example, and only `input` has been exercised so far.
+> All five documented fields above were exercised on `hermes-test`
+> (2026-05-23). Still **unconfirmed:** whether `model` or any other flags are
+> accepted, and the `session_id` history semantics (see its note).
+>
+> **Technique:** prior-context fields were verified by **token accounting**, not
+> content recall — the gateway's persistent-memory leakage makes "did it
+> remember X?" unreliable (a fact leaks across runs regardless of chaining), but
+> a loaded context visibly raises `usage.input_tokens` over the baseline. The
+> baseline for a trivial run on this profile is ~14008 input tokens (mostly the
+> agent's own system prompt/memory); it is profile- and prompt-specific, so
+> compare deltas, not absolute values.
 
 **Observed (2026-05-22, `hermes-test` profile):** `POST /v1/runs` with a body
 of just `{"input":"..."}` succeeds, returning **HTTP `202 Accepted`** and the
