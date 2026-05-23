@@ -35,7 +35,14 @@ end
 flag :token, "--token=TOKEN" do
   desc "Override the bearer token (default: the running gateway's key)"
 end
+flag :session_id, "--session-id=ID" do
+  desc "Send an X-Hermes-Session-ID request header"
+end
+flag :session_key, "--session-key=KEY" do
+  desc "Send an X-Hermes-Session-Key request header"
+end
 
 def run
-  gateway_probe(verb, path, body: body, stream: stream, token: token)
+  gateway_probe(verb, path, body: body, stream: stream, token: token,
+                session_id: session_id, session_key: session_key)
 end

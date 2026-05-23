@@ -95,12 +95,15 @@ module HermesGateway
   end
 
   # Makes a single raw HTTP request to the gateway and renders the response.
-  def probe(base_url:, method:, path:, token: nil, body: nil, stream: false)
+  def probe(base_url:, method:, path:, token: nil, body: nil, stream: false,
+            session_id: nil, session_key: nil)
     url = "#{base_url.chomp('/')}#{path}"
     client = ::HTTP
     client = client.auth("Bearer #{token}") if token && !token.empty?
     headers = {"Accept" => stream ? "text/event-stream" : "application/json"}
     headers["Content-Type"] = "application/json" if body
+    headers["X-Hermes-Session-ID"] = session_id if session_id
+    headers["X-Hermes-Session-Key"] = session_key if session_key
     client = client.headers(headers)
     opts = body ? {body: body} : {}
     response = client.request(method.to_s.downcase.to_sym, url, **opts)
@@ -111,13 +114,28 @@ module HermesGateway
   # so that redirecting stdout captures clean JSON.
   def render_response(response)
     $stderr.puts("HTTP #{response.status}")
+    render_session_headers(response)
     puts(pretty_json(response.body.to_s))
+  end
+
+  # Session response headers worth surfacing while studying conversation
+  # continuity. Lookup is case-insensitive via the HTTP gem's header set.
+  SESSION_HEADERS = ["X-Hermes-Session-ID", "X-Hermes-Session-Key"].freeze
+
+  # Prints any session-continuity response headers (to stderr, so stdout stays
+  # clean JSON). Silent when none are present.
+  def render_session_headers(response)
+    SESSION_HEADERS.each do |name|
+      value = response.headers[name]
+      $stderr.puts("#{name}: #{value}") unless value.nil?
+    end
   end
 
   # Reads an SSE response frame-by-frame, printing each event name and its
   # prettified data payload as the frames arrive.
   def render_stream(response)
     $stderr.puts("HTTP #{response.status} (streaming SSE)")
+    render_session_headers(response)
     $stdout.sync = true
     body = response.body
     buffer = +""

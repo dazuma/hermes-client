@@ -71,6 +71,14 @@ lib/hermes_agent/client/
 - Field readers are best-effort and may change pre-1.0. The raw hash is the
   source of truth.
 - List endpoints return Ruby `Array`s of wrapper objects.
+- A few readers are sourced from **response headers**, not the JSON body: the
+  `Entities::SessionHeaders` mixin (included by `ChatCompletion` and `Response`)
+  adds `#session_id` / `#session_key` from the session-continuity headers. They
+  are stored outside the wrapped payload, so `#to_h` / `#[]` still reflect only
+  the body, but they do participate in `#==` / `#hash`. Internally, `Transport`
+  surfaces them: `#post` / `#stream_post` return a `Transport::Result`
+  (`body` + downcased-key `headers`), while the header-agnostic `#get` / `#delete`
+  return the bare parsed body.
 
 ### Naming: resource accessors
 
@@ -303,13 +311,23 @@ Notes:
   (`/v1/...`, `/api/jobs`, `/health`) since they are not uniform.
 - The bearer token is sent as `Authorization: Bearer <api_key>` on every
   request. Default client-side env var is **`HERMES_API_KEY`** (distinct from
-  the server's own `API_SERVER_KEY`). *(Env var name: decision to confirm.)*
+  the server's own `API_SERVER_KEY`).
 - Mutating requests accept an optional `idempotency_key:` sent as the
   `Idempotency-Key` header (server dedupes within ~5 minutes).
 - The server advertises **session-continuity headers** in `/v1/capabilities`:
-  `X-Hermes-Session-Id` (`session_continuity_header`) and `X-Hermes-Session-Key`
-  (`session_key_header`). These appear to be the mechanism for carrying
-  continuity on the otherwise-stateless chat endpoint; exact usage to confirm.
+  `X-Hermes-Session-ID` (`session_continuity_header`) and `X-Hermes-Session-Key`
+  (`session_key_header`). Observed behavior (probed against `hermes-test`):
+  - `POST /v1/chat/completions` **accepts** both as request headers (each
+    optional and independent); the client surfaces them as `session_id:` /
+    `session_key:` on `chat.create` / `chat.stream_create`.
+  - `POST /v1/responses` does **not** honor them on the request (no effect), so
+    the client does not send them there.
+  - **Both** POST endpoints **return** the headers on the response (including on
+    SSE responses). `X-Hermes-Session-ID` is always present (the server
+    generates one when the request supplied none); `X-Hermes-Session-Key` comes
+    back only when one was sent. `GET /v1/responses/{id}` returns **neither**.
+  - The client reads these response headers onto the returned entity (see
+    "Return values" below); they come from headers, not the JSON body.
 
 ## Resource API
 
@@ -320,13 +338,18 @@ present on every request method.
 ### `client.chat` — Chat Completions (`POST /v1/chat/completions`, stateless)
 
 ```ruby
-client.chat.create(messages:)                 # => ChatCompletion
-client.chat.stream_create(messages:, &block)  # streams ChatCompletionChunk /
+client.chat.create(messages:, session_id:, session_key:)        # => ChatCompletion
+client.chat.stream_create(messages:, session_id:, session_key:, &block)
+                                              # streams ChatCompletionChunk /
                                               #   ToolProgress events
 ```
 
 - `messages` is the OpenAI-style array; content may include `image_url` parts
   (http(s) or `data:` URIs) for inline images.
+- `session_id:` / `session_key:` are optional; when given they are sent as the
+  `X-Hermes-Session-ID` / `X-Hermes-Session-Key` request headers. The returned
+  `ChatCompletion` exposes the server's `#session_id` / `#session_key` (read
+  from the response headers) regardless of whether they were sent.
 - OpenAI-compatible on the wire; additional sampling params flow through.
 - No `model` field is sent (server configures the model; it ignores a
   client-supplied one). Callers can still pass one via `**extra`.
@@ -355,6 +378,10 @@ client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 
 - Server persists conversation state; chain multi-turn either by passing the
   prior `previous_response_id` or a stable `conversation` name.
+- No `session_id:` / `session_key:` params: this endpoint ignores those request
+  headers. The returned `Response` from `create` / `stream_create` still exposes
+  the server-generated `#session_id` (read from the response header);
+  `responses.get` returns no session header, so its `#session_id` is `nil`.
 - Inline images supplied as `input_image` input parts.
 - Storage is capped server-side (~100 responses, LRU eviction) — callers should
   not assume older responses remain retrievable.
@@ -477,7 +504,11 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
 - **`Transport`** is the single chokepoint for HTTP: it owns the `http` gem
   connection, attaches the `Authorization` (and optional `Idempotency-Key`)
   headers, serializes/parses JSON, maps status codes to the error hierarchy,
-  and exposes `get` / `post` / `delete` (`patch` to come). It also opens SSE
+  and exposes `get` / `post` / `delete` (`patch` to come). `post` (and
+  `stream_post`) take an optional `headers:` for per-request headers (e.g. the
+  session-continuity headers) and return a `Transport::Result` (`body` +
+  normalized, downcased-key response `headers`); `get` / `delete` return the
+  bare parsed body, since no caller needs their headers. It also opens SSE
   streams via `stream_post` — checking the response status up front (so errors
   raise before any streaming) and handing the live response body to `Stream`
   wrapped (`map_stream_errors`) so that a connection/read failure encountered
@@ -527,7 +558,6 @@ running server; several below have been refined that way already.
   two families (OpenAI-style `{error: {...}}` for app-level errors, bare text
   for router-level 404/405). Remaining unknown: the `>= 500` ServerError body
   shape (hard to provoke safely on a live server).
-- Final name of the client-side API-key environment variable.
 - Whether a convenience helper for `conversation` chaining is worth adding.
 - Retry/backoff policy (none planned for v1 unless the server signals retryable
   conditions).

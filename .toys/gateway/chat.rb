@@ -16,9 +16,16 @@ end
 flag :stream, "--stream" do
   desc "Stream the completion as SSE"
 end
+flag :session_id, "--session-id=ID" do
+  desc "Send an X-Hermes-Session-ID request header"
+end
+flag :session_key, "--session-key=KEY" do
+  desc "Send an X-Hermes-Session-Key request header"
+end
 
 def run
   payload = {"messages" => [{"role" => "user", "content" => text}]}
   payload["stream"] = true if stream
-  gateway_probe("POST", "/v1/chat/completions", body: ::JSON.generate(payload), stream: stream)
+  gateway_probe("POST", "/v1/chat/completions", body: ::JSON.generate(payload), stream: stream,
+                session_id: session_id, session_key: session_key)
 end
