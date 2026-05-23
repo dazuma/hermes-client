@@ -135,6 +135,17 @@ families**, and the client must tolerate both:
     'messages' field", type: "invalid_request_error"}`
   - `404` on a real route with a bad id (`GET /v1/responses/{bad}`) →
     `{message: "Response not found: ...", type: "invalid_request_error"}`
+  - `404` on a run route with an unknown/evicted id (`GET /v1/runs/{bad}`,
+    `POST .../stop`, `POST .../approval`) → `{message: "Run not found: ...",
+    type: "invalid_request_error", param: null, code: "run_not_found"}`
+    (run-existence is checked **before** the body, so a bad `run_id` 404s
+    regardless of body)
+  - `400` bad approval choice (`POST /v1/runs/{id}/approval`) → `{message:
+    "Invalid approval choice; expected one of: once, session, always, deny",
+    type: "invalid_request_error", param: null, code: "invalid_approval_choice"}`
+  - `400` wrong `conversation_history` type (`POST /v1/runs`) → `{message:
+    "'conversation_history' must be an array of message objects", type:
+    "invalid_request_error"}`
 - **Framework/router-level errors** return **bare text, not JSON**:
   - `404` on an unrouted path → `404: Not Found`
   - `405` wrong method on a real route → `405: Method Not Allowed`
@@ -285,6 +296,32 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
       `response.completed.output`. So `ResponseOutputItem#id`/`#status` are
       populated for items obtained via stream events and `nil` for items read
       off a final `Response#output`.
+- **Runs API** (`runs.stream_events`, `GET /v1/runs/{id}/events`) streams
+  **plain `data:` frames** — no SSE `event:` line and **no `[DONE]` sentinel**
+  (unlike *both* chat and Responses) — each carrying its type in an **`"event"`
+  string field** plus `run_id` and a float `timestamp`. There is **no
+  `run.started`** head frame: the stream begins at the first content event, and
+  `create`'s `status: "started"` is the only start signal. Observed types:
+  - `tool.started` (`tool`, `preview`) and `tool.completed` (`tool`, `duration`
+    float, `error` boolean) bracket each tool call. As in the other streams
+    `error` is the *result* signal, not lifecycle: a failing command — or a
+    **denied** approval — gives `error: true` yet the run still completes; an
+    **approved** one gives `error: false`.
+  - `message.delta` (`delta` chunk) and `reasoning.available` (`text`, full
+    string) carry assistant output.
+  - Terminal: `run.completed` (`output` full string, `usage`
+    `{input,output,total}_tokens`) on success, or `run.cancelled` (carries
+    *only* `event`/`run_id`/`timestamp` — no `output`/`usage`) after a `stop`;
+    when a run is stopped before doing any work, that single frame is the entire
+    replay. (`run.failed` is presumed but was not reproduced.)
+  - **Approval frames** for a gated tool: `approval.request` (`command`,
+    `pattern_key`, `pattern_keys[]`, `description`, `choices[]`) when the run
+    parks at `waiting_for_approval`, then `approval.responded` (`choice`,
+    `resolved`) once the caller answers via `respond_approval` (see the runs
+    resource section).
+  - Replay is retention-bounded: subscribing to an already-terminal run still
+    works briefly, then `404`s — that expiry is **not** a function of how the
+    run ended (completed and cancelled both replay until eviction).
 
 ## Client construction and configuration
 
@@ -418,19 +455,91 @@ client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 ### `client.runs` — Runs API (long-running agent runs)
 
 ```ruby
-client.runs.create(...)            # POST /v1/runs              => Run (has #id / run_id)
-client.runs.get(run_id)            # GET  /v1/runs/{id}         => Run (poll state)
-client.runs.stream_events(run_id, &block) # GET /v1/runs/{id}/events => SSE stream
-client.runs.stop(run_id)           # POST /v1/runs/{id}/stop    => Run/result
+client.runs.create(input:,                    # POST /v1/runs            => Run
+                   instructions: nil,          #   system directive (honored)
+                   conversation_history: nil,  #   prior turns (OpenAI message array)
+                   previous_response_id: nil,  #   chain a stored /v1/responses turn
+                   session_id: nil)            #   correlation label (see note)
+client.runs.get(run_id)                        # GET  /v1/runs/{id}       => Run (poll)
+client.runs.stream_events(run_id, &block)      # GET  /v1/runs/{id}/events (SSE)
+client.runs.stop(run_id)                       # POST /v1/runs/{id}/stop  => stop ack
+client.runs.respond_approval(run_id, choice:)  # POST /v1/runs/{id}/approval
 ```
 
-- `stream_events` uses the same block-or-enumerator streaming pattern over the
-  SSE endpoint, yielding run-progress events.
-- `/v1/capabilities` advertises these run routes: `POST /v1/runs`,
-  `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/events`,
-  `POST /v1/runs/{run_id}/stop`, and additionally
-  `POST /v1/runs/{run_id}/approval` (paired with an `approval_events` feature) —
-  a human-in-the-loop approval flow we have not yet modeled.
+Unlike chat/responses, a run is **server-side asynchronous**: `create` returns
+immediately (HTTP `202`) with only `{ run_id, status: "started" }`, and progress
+is tracked by polling `get` or subscribing to `stream_events`. `run_id` is
+`run_` + 32 lowercase hex chars. (All shapes below were probed against
+`hermes-test`; folded from `devdocs/hermes-api-server.md`.)
+
+- Create body:
+  - `input:` (**required**, String) — the user prompt; a body of just `{input}` works.
+  - `instructions:` — a system directive layered over the agent prompt (**verified honored**).
+  - `conversation_history:` — an **OpenAI-style message array** (`[{role, content}, …]`),
+    loaded into context. **Server-validated**: a non-array → `400
+    "'conversation_history' must be an array of message objects"`.
+  - `previous_response_id:` — loads a stored `/v1/responses` response's context
+    into the run. **Load-if-present, not validated**: an unknown id is silently
+    ignored (still `202`, run completes, no context loaded) — contrast
+    `conversation_history`.
+  - `session_id:` — a **correlation label only**, stored and echoed back in the
+    poll (defaults to the `run_id`). It is **not** inline conversation context
+    and did not observably scope a searchable history — confirm session
+    semantics from the server, not the flaky test gateway.
+  - No `model:` is sent (server configures the model); whether the endpoint
+    accepts one is unconfirmed. Unmodeled fields go via `**extra`.
+  - (Prior-context fields were verified by **token accounting** — `usage.input_tokens`
+    rises when context loads — because the test gateway's persistent-memory
+    confabulation makes content-recall checks unreliable.)
+- `Run` (returned by both `create` and `get`; `#id` aliases `#run_id`):
+  `object: "hermes.run"`, `run_id`, `status`, `created_at`/`updated_at` (epoch
+  floats), `session_id`, `model`, `last_event`, `output`, `usage`
+  (`{input,output,total}_tokens`). **`output` and `usage` are nullable** —
+  present on a `completed` run but **absent when `cancelled`** (and before
+  terminal) — so readers must tolerate `nil`. `create`'s minimal Run carries
+  only `run_id` + `status`.
+- Status lifecycle: `started` → `running` → terminal `completed` | `cancelled`
+  | `failed` (`failed` not yet reproduced); a gated tool parks the run at
+  **`waiting_for_approval`**, and `stop` adds a transient `stopping`. Run
+  records — and especially the event buffer — are retained only **briefly**
+  after terminal, then evicted (`get`/`stop`/`approval` → `404 run_not_found`).
+- `stop` returns `200 { run_id, status: "stopping" }` (cooperative; the run then
+  resolves to `cancelled`). It need not model as a `Run` — a small ack suffices.
+- `stream_events` uses the same block-or-enumerator pattern, but over **plain
+  `data:` frames** (no SSE `event:` line, no `[DONE]` sentinel — unlike *both*
+  chat and Responses); the event type is an `"event"` string field inside each
+  payload. See "Observed streaming event types". Replay works for an
+  already-terminal run during the retention window.
+
+**Approval workflow** (human-in-the-loop dangerous-command gating; only active
+when the server profile is in `approvals.mode: manual` with a non-container
+backend — container backends skip the checks):
+
+- When the agent attempts a dangerous command (`rm -r`, `dd if=`, `DROP TABLE`,
+  `> /etc/`, …), the run parks at `waiting_for_approval` and the event stream
+  emits **`approval.request`** (`command`, `pattern_key`, `pattern_keys[]`,
+  `description`, `choices: [once, session, always, deny]`). There is **no
+  approval id** — the pending approval is keyed by `run_id` (one outstanding per
+  run), so `respond_approval` needs only the `run_id` + `choice`.
+- `respond_approval(run_id, choice:)` → body `{"choice": "<once|session|always|
+  deny>"}`. Invalid choice → `400 invalid_approval_choice` (message lists the
+  four valid values). Success → `200 { object: "hermes.run.approval_response",
+  run_id, choice, resolved }` (`resolved` = count resolved), and the stream
+  emits **`approval.responded`** (`choice`, `resolved`).
+- **No auto-timeout** observed: a parked run waited ~89s with no auto-deny
+  despite the docs' `approvals.timeout: 60` — treat a gated run as blocking
+  **indefinitely** pending a response.
+- Outcome: **deny** → the gated `tool.completed` carries `error: true` and the
+  agent narrates an abort, **but the run still ends `completed`** (deny ≠
+  failure). **approve** (`once` verified) → the tool executes, `tool.completed`
+  carries `error: false`, the run resumes to `completed`. The only wire
+  difference between the two is `tool.completed.error`. ⚠️ `always` writes a
+  permanent `command_allowlist` entry (server config mutation) and `session`
+  auto-approves the pattern for the rest of the gateway session — prefer
+  `once`/`deny` unless those side effects are intended.
+- `/v1/capabilities` advertises all five run routes and the
+  `run_submission`/`run_status`/`run_events_sse`/`run_stop`/`run_approval_response`
+  + `approval_events`/`tool_progress_events` features.
 
 ### `client.jobs` — Jobs API (scheduled background work, under `/api/jobs`)
 
@@ -544,13 +653,19 @@ prettified JSON / raw SSE frames) are the means to resolve these against a
 running server; several below have been refined that way already.
 
 - Exact request bodies and response field names for each endpoint. Discovery,
-  chat completions, and the Responses API (create/get/delete/stream, including
-  the non-streaming, deletion, and tool-item output shapes) are now mapped (see
-  above); `runs` and `jobs` request/response bodies are still largely unknown.
+  chat completions, the Responses API (create/get/delete/stream, incl. the
+  non-streaming, deletion, and tool-item output shapes), and the **Runs API**
+  (create body, poll/status, stop, and the full approval workflow) are now
+  mapped (see above); only `jobs` request/response bodies remain largely
+  unknown. Runs leftovers: whether `create` accepts a `model:` field, and the
+  `failed`-status / `run.failed` shape (not reproduced — needs a model/infra
+  failure).
 - The full set of SSE event types and payloads. Chat-completion chunks
-  (including the custom `hermes.tool.progress` frames) and the full Responses
-  API event sequence — including the terminal `response.completed` — are now
-  captured (above); still outstanding is the run events stream.
+  (including the custom `hermes.tool.progress` frames), the full Responses API
+  event sequence (including the terminal `response.completed`), and the **run
+  events stream** (`tool.*`, `message.delta`, `reasoning.available`,
+  `run.completed`/`run.cancelled`, `approval.request`/`approval.responded`) are
+  now captured (above).
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
   arrays. (`models` was observed returning a full `{ object: "list", data }`
   with no pagination fields.)
