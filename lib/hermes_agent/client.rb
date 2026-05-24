@@ -14,6 +14,7 @@ require "hermes_agent/client/resources/chat"
 require "hermes_agent/client/resources/health"
 require "hermes_agent/client/resources/models"
 require "hermes_agent/client/resources/responses"
+require "hermes_agent/client/resources/runs"
 
 ##
 # Classes related to the Hermes agent
@@ -98,6 +99,15 @@ module HermesAgent
     #
     def responses
       @responses ||= Resources::Responses.new(@transport)
+    end
+
+    ##
+    # The runs resource (the Runs API, for long-running server-side agent
+    # runs).
+    # @return [Resources::Runs]
+    #
+    def runs
+      @runs ||= Resources::Runs.new(@transport)
     end
   end
 end
