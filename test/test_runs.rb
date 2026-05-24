@@ -163,4 +163,53 @@ describe "runs" do
     client = ::HermesAgent::Client.new(base_url: "http://127.0.0.1:8642")
     assert_instance_of(::HermesAgent::Client::Resources::Runs, client.runs)
   end
+
+  integration_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
+
+  if integration_port
+    let(:client) do
+      ::HermesAgent::Client.new(base_url: "http://localhost:#{integration_port}",
+                                api_key: ::HermesAgent::Tests.integration_api_key)
+    end
+
+    # A run is server-side asynchronous: create returns immediately and the run
+    # progresses in the background. Poll get until it reaches a terminal status
+    # (or time out), so the assertions can inspect the finished run.
+    def poll_until_terminal(run_id, timeout: 30.0, interval: 0.5)
+      terminal = ["completed", "cancelled", "failed"]
+      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
+      loop do
+        run = client.runs.get(run_id)
+        return run if terminal.include?(run.status)
+        if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+          flunk("run #{run_id} did not reach a terminal status within #{timeout}s (last: #{run.status})")
+        end
+        sleep(interval)
+      end
+    end
+
+    it "creates a run and polls it to completion against the live gateway" do
+      created = client.runs.create(input: "Say hello in exactly two words.")
+      assert_instance_of(::HermesAgent::Client::Entities::Run, created)
+      # Create returns immediately with the minimal accepted run.
+      refute_nil(created.run_id)
+      assert_equal(created.run_id, created.id)
+      assert_equal("started", created.status)
+
+      run = poll_until_terminal(created.run_id)
+      assert_equal(created.run_id, run.run_id)
+      assert_equal("hermes.run", run.object)
+      assert_equal("completed", run.status)
+      assert_equal("run.completed", run.last_event)
+      refute_empty(run.output)
+      assert_instance_of(::HermesAgent::Client::Entities::RunUsage, run.usage)
+      assert_operator(run.usage.total_tokens, :>, 0)
+    end
+
+    it "raises NotFoundError when getting an unknown run id" do
+      assert_raises(::HermesAgent::Client::NotFoundError) do
+        client.runs.get("run_#{'0' * 32}")
+      end
+    end
+  end
 end
