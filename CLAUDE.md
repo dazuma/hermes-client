@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-This gem is an early-stage stub. `HermesAgent::Client` is currently an empty
-class; the client implementation has not been written yet. The tooling,
-packaging, and CI are fully set up, so most work here is building out the
-actual API client against the Hermes API Server (see below).
+This gem is under active development. The client is built out resource by
+resource: the `health`, `capabilities`, `models`, `chat` (incl. streaming),
+`responses` (incl. streaming), and `runs` resources are implemented; `jobs` is
+the main resource still to build (and its wire format needs probing first). The
+tooling, packaging, and CI are fully set up.
 
 **Read [`devdocs/DESIGN.md`](devdocs/DESIGN.md) first.** It specifies the
 conventions, namespacing, resource API, return-value/streaming/error models,
@@ -47,6 +48,7 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 
 - Tests use Minitest spec-style `describe` and `it` blocks, with traditional assertions, e.g. `assert_equal`, instead of `must`/`wont` expectations.
 - Tests that need to hit a real Hermes gateway should be guarded behind a check whether the environment variable `HERMES_CLIENT_INTEGRATION_PORT` is set. Such tests can use the value of that variable as the port number of the gateway. This variable will be set by the Toys test tool when `--integration-port=<PORT NUMBER>` and `--integration-profile=hermes-test` are passed to `toys test`.
+- Integration tests with real side effects or unusual cost are gated behind their own opt-in env var (in addition to `HERMES_CLIENT_INTEGRATION_PORT`), so a tester chooses to run them — e.g. the runs approve-path test, which actually executes a gated command, requires `HERMES_CLIENT_INTEGRATION_APPROVE`.
 
 ## Exploring real server behavior (`toys gateway`)
 
