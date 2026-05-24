@@ -111,6 +111,28 @@ module HermesAgent
         Result.new(body: map_stream_errors(response.body), headers: normalize_headers(response.headers))
       end
 
+      ##
+      # Open a streaming GET and return its live response body for an SSE
+      # consumer ({Stream}). Like {#stream_post}, the status is checked up front
+      # so an error response raises before any streaming begins; on success the
+      # body is returned unread for incremental consumption. The response
+      # headers are not surfaced (this is the streaming counterpart of {#get},
+      # which also returns the bare body).
+      #
+      # @param path [String] The request path, including its prefix.
+      # @return [Enumerator] The live chunk enumerator. Iterate it with `#each`
+      #     to read byte chunks as they arrive.
+      # @raise [APIError] If the server returns a non-2xx response.
+      #
+      def stream_get(path)
+        response = request { client.get(url_for(path)) }
+        unless response.status.success?
+          raise APIError.from_response(status: response.code, body: response.body.to_s,
+                                       headers: response.headers.to_h)
+        end
+        map_stream_errors(response.body)
+      end
+
       private
 
       ##

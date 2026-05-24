@@ -166,6 +166,189 @@ module HermesAgent
           self["status"]
         end
       end
+
+      ##
+      # One event in a streamed run ({Resources::Runs#stream_events}).
+      #
+      # Unlike chat and the Responses API, the run events stream uses plain
+      # `data:` frames — there is no SSE `event:` line and no `[DONE]` sentinel
+      # — so each event carries its type in an `"event"` payload field (read via
+      # {#event}) alongside {#run_id} and a {#timestamp}. The stream has no
+      # head frame; it begins at the first content event. Which other readers
+      # are meaningful depends on {#event}; the rest return `nil`. Observed
+      # types: `tool.started`/`tool.completed`, `message.delta`,
+      # `reasoning.available`, the terminal `run.completed`/`run.cancelled`
+      # (`run.failed` presumed), and `approval.request`/`approval.responded`.
+      #
+      class RunEvent < Entity
+        ##
+        # The terminal lifecycle event of a streamed run: the last event whose
+        # {#event} type is a `run.*` frame (`run.completed`, `run.cancelled`, or
+        # `run.failed`). Returns `nil` if the stream closed without one (e.g. it
+        # was cut short). Used as the aggregated {Stream#result} of
+        # {Resources::Runs#stream_events}.
+        #
+        # @param events [Array<RunEvent>] The streamed events, in order.
+        # @return [RunEvent, nil]
+        #
+        def self.terminal(events)
+          events.reverse_each.find { |event| event.event&.start_with?("run.") }
+        end
+
+        ##
+        # The event type, e.g. `"message.delta"` or `"run.completed"`.
+        # @return [String, nil]
+        #
+        def event
+          self["event"]
+        end
+
+        ##
+        # The id of the run this event belongs to (`"run_…"`).
+        # @return [String, nil]
+        #
+        def run_id
+          self["run_id"]
+        end
+
+        ##
+        # When the event was emitted, as a Unix timestamp (seconds, fractional).
+        # @return [Float, nil]
+        #
+        def timestamp
+          self["timestamp"]
+        end
+
+        ##
+        # The tool name on a `tool.started` / `tool.completed` event, e.g.
+        # `"terminal"`.
+        # @return [String, nil]
+        #
+        def tool
+          self["tool"]
+        end
+
+        ##
+        # A preview of the tool invocation on a `tool.started` event (e.g. the
+        # command to be run).
+        # @return [String, nil]
+        #
+        def preview
+          self["preview"]
+        end
+
+        ##
+        # The tool's execution time on a `tool.completed` event, in seconds.
+        # @return [Float, nil]
+        #
+        def duration
+          self["duration"]
+        end
+
+        ##
+        # Whether the tool reported an error on a `tool.completed` event. This
+        # is the tool *result* signal, not a lifecycle marker: a failed command
+        # — or a denied approval — reports `true` yet the run can still complete.
+        # @return [boolean, nil]
+        #
+        def error?
+          self["error"]
+        end
+
+        ##
+        # The incremental assistant text on a `message.delta` event.
+        # @return [String, nil]
+        #
+        def delta
+          self["delta"]
+        end
+
+        ##
+        # The full reasoning text on a `reasoning.available` event.
+        # @return [String, nil]
+        #
+        def text
+          self["text"]
+        end
+
+        ##
+        # The assembled final assistant text on a `run.completed` event.
+        # @return [String, nil]
+        #
+        def output
+          self["output"]
+        end
+
+        ##
+        # The token usage on a `run.completed` event, wrapped in a {RunUsage}.
+        # Returns `nil` when the field is absent.
+        # @return [RunUsage, nil]
+        #
+        def usage
+          raw = self["usage"]
+          raw.is_a?(::Hash) ? RunUsage.new(raw) : nil
+        end
+
+        ##
+        # The command awaiting approval on an `approval.request` event.
+        # @return [String, nil]
+        #
+        def command
+          self["command"]
+        end
+
+        ##
+        # The matched approval pattern key on an `approval.request` event.
+        # @return [String, nil]
+        #
+        def pattern_key
+          self["pattern_key"]
+        end
+
+        ##
+        # All matched approval pattern keys on an `approval.request` event.
+        # Returns `nil` when the field is absent.
+        # @return [Array<String>, nil]
+        #
+        def pattern_keys
+          self["pattern_keys"]
+        end
+
+        ##
+        # A human-readable description of the gated command on an
+        # `approval.request` event.
+        # @return [String, nil]
+        #
+        def description
+          self["description"]
+        end
+
+        ##
+        # The valid approval choices on an `approval.request` event (e.g.
+        # `["once", "session", "always", "deny"]`). Returns `nil` when the field
+        # is absent.
+        # @return [Array<String>, nil]
+        #
+        def choices
+          self["choices"]
+        end
+
+        ##
+        # The choice that resolved an approval on an `approval.responded` event.
+        # @return [String, nil]
+        #
+        def choice
+          self["choice"]
+        end
+
+        ##
+        # The count of approvals resolved on an `approval.responded` event.
+        # @return [Integer, nil]
+        #
+        def resolved
+          self["resolved"]
+        end
+      end
     end
   end
 end

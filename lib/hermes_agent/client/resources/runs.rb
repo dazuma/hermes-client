@@ -92,6 +92,38 @@ module HermesAgent
         def stop(run_id)
           Entities::RunStop.new(@transport.post("/v1/runs/#{run_id}/stop", {}).body)
         end
+
+        ##
+        # Stream a run's events as they occur (its tool-call progress, token
+        # deltas, reasoning, approval prompts, and lifecycle), following the
+        # block-or-enumerator pattern.
+        #
+        # With a block, each {Entities::RunEvent} is yielded as it arrives and
+        # the terminal `run.*` event is returned once the stream closes. Without
+        # a block, a {Stream} is returned for the caller to iterate; its
+        # {Stream#result} is that terminal event (see
+        # {Entities::RunEvent.terminal}). Subscribing replays a run from its
+        # first event, so an already-terminal run can still be streamed during
+        # its (brief) retention window.
+        #
+        # @param run_id [String] The run id (`"run_…"`).
+        # @yieldparam event [Entities::RunEvent] Each streamed event.
+        # @return [Entities::RunEvent, Stream, nil] The terminal event when a
+        #     block is given (or `nil` if the stream closed without one),
+        #     otherwise the {Stream}.
+        # @raise [NotFoundError] If no such run exists (or it was evicted).
+        # @raise [APIError] If the server returns another non-2xx response.
+        #
+        def stream_events(run_id, &block)
+          chunks = @transport.stream_get("/v1/runs/#{run_id}/events")
+          stream = Stream.new(chunks, event_class: Entities::RunEvent) do |events|
+            Entities::RunEvent.terminal(events)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          stream.result
+        end
       end
     end
   end

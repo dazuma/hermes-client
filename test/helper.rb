@@ -106,6 +106,11 @@ module HermesAgent
         result(@stream_chunks)
       end
 
+      def stream_get(path)
+        @requested_path = path
+        @stream_chunks
+      end
+
       private
 
       def result(body)

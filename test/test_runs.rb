@@ -187,6 +187,144 @@ describe ::HermesAgent::Client::Resources::Runs do
   end
 end
 
+describe ::HermesAgent::Client::Entities::RunEvent do
+  it "reads the common envelope fields" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "message.delta", "run_id" => "run_1", "timestamp" => 1_779_510_796.5
+    )
+    assert_equal("message.delta", event.event)
+    assert_equal("run_1", event.run_id)
+    assert_in_delta(1_779_510_796.5, event.timestamp)
+  end
+
+  it "reads a tool.started event" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "tool.started", "tool" => "terminal", "preview" => "sleep 10"
+    )
+    assert_equal("terminal", event.tool)
+    assert_equal("sleep 10", event.preview)
+  end
+
+  it "reads a tool.completed event, including the error result flag" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "tool.completed", "tool" => "terminal", "duration" => 0.42, "error" => false
+    )
+    assert_equal("terminal", event.tool)
+    assert_in_delta(0.42, event.duration)
+    assert_equal(false, event.error?)
+  end
+
+  it "reads a message.delta event" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new("event" => "message.delta", "delta" => "Hel")
+    assert_equal("Hel", event.delta)
+  end
+
+  it "reads a reasoning.available event" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new("event" => "reasoning.available", "text" => "because")
+    assert_equal("because", event.text)
+  end
+
+  it "reads a run.completed event, wrapping usage in a RunUsage" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "run.completed", "output" => "Hello",
+      "usage" => {"input_tokens" => 10, "output_tokens" => 1, "total_tokens" => 11}
+    )
+    assert_equal("Hello", event.output)
+    assert_instance_of(::HermesAgent::Client::Entities::RunUsage, event.usage)
+    assert_equal(11, event.usage.total_tokens)
+  end
+
+  it "reads an approval.request event" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "approval.request", "command" => "rm -rf /tmp/x", "pattern_key" => "rm",
+      "pattern_keys" => ["rm", "rm_rf"], "description" => "Delete files",
+      "choices" => ["once", "session", "always", "deny"]
+    )
+    assert_equal("rm -rf /tmp/x", event.command)
+    assert_equal("rm", event.pattern_key)
+    assert_equal(["rm", "rm_rf"], event.pattern_keys)
+    assert_equal("Delete files", event.description)
+    assert_equal(["once", "session", "always", "deny"], event.choices)
+  end
+
+  it "reads an approval.responded event" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new("event" => "approval.responded", "choice" => "deny",
+                                                          "resolved" => 1)
+    assert_equal("deny", event.choice)
+    assert_equal(1, event.resolved)
+  end
+
+  it "returns nil for fields when absent" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new({})
+    assert_nil(event.event)
+    assert_nil(event.usage)
+    assert_nil(event.output)
+    assert_nil(event.tool)
+    assert_nil(event.error?)
+    assert_nil(event.pattern_keys)
+    assert_nil(event.choices)
+  end
+
+  describe ".terminal" do
+    it "returns the last run.* lifecycle event" do
+      events = [
+        ::HermesAgent::Client::Entities::RunEvent.new("event" => "message.delta", "delta" => "Hi"),
+        ::HermesAgent::Client::Entities::RunEvent.new("event" => "run.completed", "output" => "Hi"),
+      ]
+      terminal = ::HermesAgent::Client::Entities::RunEvent.terminal(events)
+      assert_equal("run.completed", terminal.event)
+      assert_equal("Hi", terminal.output)
+    end
+
+    it "returns nil when no run.* event is present" do
+      events = [::HermesAgent::Client::Entities::RunEvent.new("event" => "message.delta", "delta" => "Hi")]
+      assert_nil(::HermesAgent::Client::Entities::RunEvent.terminal(events))
+    end
+  end
+end
+
+describe "Resources::Runs#stream_events" do
+  def frame(hash)
+    "data: #{::JSON.generate(hash)}\n\n"
+  end
+
+  let(:stream_chunks) do
+    [
+      frame("event" => "message.delta", "run_id" => "run_1", "timestamp" => 1.0, "delta" => "Hel"),
+      frame("event" => "message.delta", "run_id" => "run_1", "timestamp" => 1.1, "delta" => "lo"),
+      frame("event" => "run.completed", "run_id" => "run_1", "timestamp" => 2.0, "output" => "Hello",
+            "usage" => {"input_tokens" => 10, "output_tokens" => 1, "total_tokens" => 11}),
+    ]
+  end
+  let(:transport) { ::HermesAgent::Tests::FakeTransport.new({}, stream_chunks) }
+
+  it "gets the run's events path" do
+    ::HermesAgent::Client::Resources::Runs.new(transport).stream_events("run_1").result
+    assert_equal("/v1/runs/run_1/events", transport.requested_path)
+  end
+
+  it "yields RunEvent events and returns the terminal event (block form)" do
+    deltas = []
+    terminal = ::HermesAgent::Client::Resources::Runs.new(transport).stream_events("run_1") do |event|
+      assert_instance_of(::HermesAgent::Client::Entities::RunEvent, event)
+      deltas << event.delta if event.delta
+    end
+    assert_equal(["Hel", "lo"], deltas)
+    assert_instance_of(::HermesAgent::Client::Entities::RunEvent, terminal)
+    assert_equal("run.completed", terminal.event)
+    assert_equal("Hello", terminal.output)
+    assert_equal(11, terminal.usage.total_tokens)
+  end
+
+  it "returns a Stream the caller can iterate (enumerator form)" do
+    stream = ::HermesAgent::Client::Resources::Runs.new(transport).stream_events("run_1")
+    assert_instance_of(::HermesAgent::Client::Stream, stream)
+    text = stream.each.filter_map(&:delta).join
+    assert_equal("Hello", text)
+    assert_equal("run.completed", stream.result.event)
+  end
+end
+
 describe "runs" do
   it "is reachable from the client" do
     client = ::HermesAgent::Client.new(base_url: "http://127.0.0.1:8642")
@@ -251,6 +389,21 @@ describe "runs" do
       # Stop is cooperative: the run then resolves to a terminal cancelled.
       run = poll_until_terminal(created.run_id)
       assert_equal("cancelled", run.status)
+    end
+
+    it "streams a run's events to completion against the live gateway" do
+      created = client.runs.create(input: "Say hello in exactly two words.")
+      events = []
+      terminal = client.runs.stream_events(created.run_id) do |event|
+        assert_instance_of(::HermesAgent::Client::Entities::RunEvent, event)
+        events << event
+      end
+      refute_empty(events)
+      assert_instance_of(::HermesAgent::Client::Entities::RunEvent, terminal)
+      assert_equal("run.completed", terminal.event)
+      refute_empty(terminal.output)
+      assert_instance_of(::HermesAgent::Client::Entities::RunUsage, terminal.usage)
+      assert_operator(terminal.usage.total_tokens, :>, 0)
     end
 
     it "raises NotFoundError when getting an unknown run id" do
