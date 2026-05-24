@@ -140,6 +140,32 @@ module HermesAgent
           raw.is_a?(::Hash) ? RunUsage.new(raw) : nil
         end
       end
+
+      ##
+      # The acknowledgement returned by stopping a run
+      # ({Resources::Runs#stop}): `{run_id, status: "stopping"}`. Stop is
+      # cooperative — this ack only confirms the stop was accepted; the run
+      # then resolves to a terminal `"cancelled"` status, observable by polling
+      # {Resources::Runs#get}. It is deliberately not a full {Run} (it carries
+      # no output, usage, or timestamps).
+      #
+      class RunStop < Entity
+        ##
+        # The id of the run being stopped (`"run_…"`).
+        # @return [String, nil]
+        #
+        def run_id
+          self["run_id"]
+        end
+
+        ##
+        # The status acknowledged by the stop, `"stopping"`.
+        # @return [String, nil]
+        #
+        def status
+          self["status"]
+        end
+      end
     end
   end
 end

@@ -88,9 +88,26 @@ describe ::HermesAgent::Client::Entities::Run do
   end
 end
 
+describe ::HermesAgent::Client::Entities::RunStop do
+  it "reads the run_id and status" do
+    ack = ::HermesAgent::Client::Entities::RunStop.new("run_id" => "run_1", "status" => "stopping")
+    assert_equal("run_1", ack.run_id)
+    assert_equal("stopping", ack.status)
+  end
+
+  it "returns nil for fields when absent" do
+    ack = ::HermesAgent::Client::Entities::RunStop.new({})
+    assert_nil(ack.run_id)
+    assert_nil(ack.status)
+  end
+end
+
 describe ::HermesAgent::Client::Resources::Runs do
   let(:transport) do
     ::HermesAgent::Tests::FakeTransport.new("run_id" => "run_1", "status" => "started")
+  end
+  let(:stop_transport) do
+    ::HermesAgent::Tests::FakeTransport.new("run_id" => "run_1", "status" => "stopping")
   end
 
   it "posts to the /v1/runs path" do
@@ -156,6 +173,18 @@ describe ::HermesAgent::Client::Resources::Runs do
     assert_instance_of(::HermesAgent::Client::Entities::Run, run)
     assert_equal("completed", run.status)
   end
+
+  it "posts to the /v1/runs/{id}/stop path" do
+    ::HermesAgent::Client::Resources::Runs.new(stop_transport).stop("run_1")
+    assert_equal("/v1/runs/run_1/stop", stop_transport.requested_path)
+  end
+
+  it "wraps the stop response in a RunStop entity" do
+    ack = ::HermesAgent::Client::Resources::Runs.new(stop_transport).stop("run_1")
+    assert_instance_of(::HermesAgent::Client::Entities::RunStop, ack)
+    assert_equal("run_1", ack.run_id)
+    assert_equal("stopping", ack.status)
+  end
 end
 
 describe "runs" do
@@ -204,6 +233,24 @@ describe "runs" do
       refute_empty(run.output)
       assert_instance_of(::HermesAgent::Client::Entities::RunUsage, run.usage)
       assert_operator(run.usage.total_tokens, :>, 0)
+    end
+
+    it "stops a run against the live gateway, resolving it to cancelled" do
+      # Induce a single `sleep` terminal tool call: it holds the run alive for
+      # a deterministic window while burning wall-clock, not tokens, so an
+      # immediate stop reliably lands mid-run at near-zero cost. `sleep` is not
+      # an approval-gated command.
+      created = client.runs.create(
+        input: "Please run the shell command 'sleep 10' in the terminal, then tell me it finished."
+      )
+      ack = client.runs.stop(created.run_id)
+      assert_instance_of(::HermesAgent::Client::Entities::RunStop, ack)
+      assert_equal(created.run_id, ack.run_id)
+      assert_equal("stopping", ack.status)
+
+      # Stop is cooperative: the run then resolves to a terminal cancelled.
+      run = poll_until_terminal(created.run_id)
+      assert_equal("cancelled", run.status)
     end
 
     it "raises NotFoundError when getting an unknown run id" do

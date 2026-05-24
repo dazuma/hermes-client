@@ -75,6 +75,23 @@ module HermesAgent
         def get(run_id)
           Entities::Run.new(@transport.get("/v1/runs/#{run_id}"))
         end
+
+        ##
+        # Request that a run stop.
+        #
+        # The stop is cooperative: this returns as soon as the request is
+        # accepted, with an ack carrying `status: "stopping"`. The run then
+        # resolves to a terminal `"cancelled"` status — poll {#get} to observe
+        # that transition.
+        #
+        # @param run_id [String] The run id (`"run_…"`).
+        # @return [Entities::RunStop] The stop acknowledgement.
+        # @raise [NotFoundError] If no such run exists (or it was evicted).
+        # @raise [APIError] If the server returns another non-2xx response.
+        #
+        def stop(run_id)
+          Entities::RunStop.new(@transport.post("/v1/runs/#{run_id}/stop", {}).body)
+        end
       end
     end
   end
