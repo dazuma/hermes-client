@@ -124,6 +124,31 @@ module HermesAgent
           stream.each(&block)
           stream.result
         end
+
+        ##
+        # Answer a run's pending approval, when a gated dangerous command has
+        # parked it at `waiting_for_approval`.
+        #
+        # A run has at most one outstanding approval, keyed by its id, so only
+        # the `run_id` and a `choice` are needed. `"once"` approves this one
+        # invocation; `"deny"` rejects it (the run still ends `completed`). Note
+        # `"always"` writes a permanent server-side allowlist entry and
+        # `"session"` auto-approves the pattern for the rest of the gateway
+        # session — prefer `"once"`/`"deny"` unless those side effects are
+        # intended. An invalid choice is rejected by the server.
+        #
+        # @param run_id [String] The run id (`"run_…"`).
+        # @param choice [String] One of `"once"`, `"session"`, `"always"`, or
+        #     `"deny"`.
+        # @return [Entities::RunApprovalResponse] The approval acknowledgement.
+        # @raise [NotFoundError] If no such run exists (or it was evicted).
+        # @raise [APIError] On an invalid choice (`400`) or another non-2xx
+        #     response.
+        #
+        def respond_approval(run_id, choice:)
+          body = {choice: choice}
+          Entities::RunApprovalResponse.new(@transport.post("/v1/runs/#{run_id}/approval", body).body)
+        end
       end
     end
   end

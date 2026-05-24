@@ -102,12 +102,37 @@ describe ::HermesAgent::Client::Entities::RunStop do
   end
 end
 
+describe ::HermesAgent::Client::Entities::RunApprovalResponse do
+  it "reads the fields" do
+    resp = ::HermesAgent::Client::Entities::RunApprovalResponse.new(
+      "object" => "hermes.run.approval_response", "run_id" => "run_1", "choice" => "deny", "resolved" => 1
+    )
+    assert_equal("hermes.run.approval_response", resp.object)
+    assert_equal("run_1", resp.run_id)
+    assert_equal("deny", resp.choice)
+    assert_equal(1, resp.resolved)
+  end
+
+  it "returns nil for fields when absent" do
+    resp = ::HermesAgent::Client::Entities::RunApprovalResponse.new({})
+    assert_nil(resp.object)
+    assert_nil(resp.run_id)
+    assert_nil(resp.choice)
+    assert_nil(resp.resolved)
+  end
+end
+
 describe ::HermesAgent::Client::Resources::Runs do
   let(:transport) do
     ::HermesAgent::Tests::FakeTransport.new("run_id" => "run_1", "status" => "started")
   end
   let(:stop_transport) do
     ::HermesAgent::Tests::FakeTransport.new("run_id" => "run_1", "status" => "stopping")
+  end
+  let(:approval_transport) do
+    ::HermesAgent::Tests::FakeTransport.new(
+      "object" => "hermes.run.approval_response", "run_id" => "run_1", "choice" => "deny", "resolved" => 1
+    )
   end
 
   it "posts to the /v1/runs path" do
@@ -184,6 +209,20 @@ describe ::HermesAgent::Client::Resources::Runs do
     assert_instance_of(::HermesAgent::Client::Entities::RunStop, ack)
     assert_equal("run_1", ack.run_id)
     assert_equal("stopping", ack.status)
+  end
+
+  it "posts to the /v1/runs/{id}/approval path with the choice" do
+    ::HermesAgent::Client::Resources::Runs.new(approval_transport).respond_approval("run_1", choice: "deny")
+    assert_equal("/v1/runs/run_1/approval", approval_transport.requested_path)
+    assert_equal("deny", approval_transport.requested_body[:choice])
+  end
+
+  it "wraps the approval response in a RunApprovalResponse entity" do
+    resp = ::HermesAgent::Client::Resources::Runs.new(approval_transport).respond_approval("run_1", choice: "deny")
+    assert_instance_of(::HermesAgent::Client::Entities::RunApprovalResponse, resp)
+    assert_equal("hermes.run.approval_response", resp.object)
+    assert_equal("deny", resp.choice)
+    assert_equal(1, resp.resolved)
   end
 end
 
@@ -340,19 +379,24 @@ describe "runs" do
     end
 
     # A run is server-side asynchronous: create returns immediately and the run
-    # progresses in the background. Poll get until it reaches a terminal status
-    # (or time out), so the assertions can inspect the finished run.
-    def poll_until_terminal(run_id, timeout: 30.0, interval: 0.5)
-      terminal = ["completed", "cancelled", "failed"]
+    # progresses in the background. Poll get until the yielded run satisfies the
+    # given condition (or time out), so the assertions can inspect it.
+    def poll_until(run_id, timeout: 30.0, interval: 0.5)
       deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
       loop do
         run = client.runs.get(run_id)
-        return run if terminal.include?(run.status)
+        return run if yield(run)
         if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
-          flunk("run #{run_id} did not reach a terminal status within #{timeout}s (last: #{run.status})")
+          flunk("run #{run_id} did not satisfy the poll condition within #{timeout}s (last: #{run.status})")
         end
         sleep(interval)
       end
+    end
+
+    TERMINAL_STATUSES = ["completed", "cancelled", "failed"].freeze
+
+    def poll_until_terminal(run_id, **)
+      poll_until(run_id, **) { |run| TERMINAL_STATUSES.include?(run.status) }
     end
 
     it "creates a run and polls it to completion against the live gateway" do
@@ -409,6 +453,49 @@ describe "runs" do
     it "raises NotFoundError when getting an unknown run id" do
       assert_raises(::HermesAgent::Client::NotFoundError) do
         client.runs.get("run_#{'0' * 32}")
+      end
+    end
+
+    # The approval gate only fires when the gateway profile is in
+    # `approvals.mode: manual` with a non-container backend (hermes-test is).
+    # `rm -rf /tmp/<throwaway>` matches the recursive-delete dangerous pattern
+    # but is harmless even if executed, and is not on the hardline blocklist.
+    APPROVAL_TRIGGER = "Please run the shell command 'rm -rf /tmp/hermes_client_approval_probe' in the terminal."
+
+    it "denies a parked approval, and the run still completes" do
+      created = client.runs.create(input: APPROVAL_TRIGGER)
+      parked = poll_until(created.run_id) { |run| run.status == "waiting_for_approval" }
+      assert_equal("waiting_for_approval", parked.status)
+
+      resp = client.runs.respond_approval(created.run_id, choice: "deny")
+      assert_instance_of(::HermesAgent::Client::Entities::RunApprovalResponse, resp)
+      assert_equal("hermes.run.approval_response", resp.object)
+      assert_equal(created.run_id, resp.run_id)
+      assert_equal("deny", resp.choice)
+      assert_operator(resp.resolved, :>=, 1)
+
+      # Deny is not a failure: the agent aborts the command but the run resolves
+      # to completed.
+      run = poll_until_terminal(created.run_id)
+      assert_equal("completed", run.status)
+    end
+
+    # Approving actually EXECUTES the gated command, so this is opt-in: a tester
+    # sets HERMES_CLIENT_INTEGRATION_APPROVE to run it. Uses `once` (no config
+    # mutation, unlike `always`/`session`) against a throwaway /tmp path.
+    if ENV["HERMES_CLIENT_INTEGRATION_APPROVE"]
+      it "approves a parked approval with once, and the run completes" do
+        created = client.runs.create(input: APPROVAL_TRIGGER)
+        parked = poll_until(created.run_id) { |run| run.status == "waiting_for_approval" }
+        assert_equal("waiting_for_approval", parked.status)
+
+        resp = client.runs.respond_approval(created.run_id, choice: "once")
+        assert_instance_of(::HermesAgent::Client::Entities::RunApprovalResponse, resp)
+        assert_equal("once", resp.choice)
+        assert_operator(resp.resolved, :>=, 1)
+
+        run = poll_until_terminal(created.run_id)
+        assert_equal("completed", run.status)
       end
     end
   end

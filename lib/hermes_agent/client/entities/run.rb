@@ -349,6 +349,50 @@ module HermesAgent
           self["resolved"]
         end
       end
+
+      ##
+      # The acknowledgement returned by responding to a run's pending approval
+      # ({Resources::Runs#respond_approval}): `{object:
+      # "hermes.run.approval_response", run_id, choice, resolved}`. The run then
+      # resumes (the gated tool executes on an approve, or is aborted on a
+      # deny — though a denied run still ends `completed`); observe the
+      # `approval.responded` and `tool.completed` frames on the event stream, or
+      # poll {Resources::Runs#get}, for the outcome.
+      #
+      class RunApprovalResponse < Entity
+        ##
+        # The object type, `"hermes.run.approval_response"`.
+        # @return [String, nil]
+        #
+        def object
+          self["object"]
+        end
+
+        ##
+        # The id of the run whose approval was answered (`"run_…"`).
+        # @return [String, nil]
+        #
+        def run_id
+          self["run_id"]
+        end
+
+        ##
+        # The choice that was submitted: `"once"`, `"session"`, `"always"`, or
+        # `"deny"`.
+        # @return [String, nil]
+        #
+        def choice
+          self["choice"]
+        end
+
+        ##
+        # The number of pending approvals resolved by the response.
+        # @return [Integer, nil]
+        #
+        def resolved
+          self["resolved"]
+        end
+      end
     end
   end
 end
