@@ -626,13 +626,13 @@ specific decisions that convention alone doesn't settle):
 - `#id` is the natural reader for the `id` field (no aliasing needed — contrast
   `Run#id`, which aliases `run_id`).
 
-**Implementation notes for the resource:**
+**Implementation notes for the resource** (all now implemented and verified
+against the live `hermes-test` gateway):
 
-- **`Transport#patch` must be added** (it's the "(patch to come)" item under
-  Internal layering), plus `FakeTransport#patch`. No jobs endpoint returns
-  session-continuity headers, so `patch` can return the **bare parsed body**
+- **`Transport#patch`** was added (plus `FakeTransport#patch`). No jobs endpoint
+  returns session-continuity headers, so `patch` returns the **bare parsed body**
   (like `get`/`delete`), not a `Transport::Result`. `create`/`pause`/`resume`/
-  `trigger` go through `post`; just take `.body` off its `Result`.
+  `trigger` go through `post`; the resource just takes `.body` off its `Result`.
 - **`pause`/`resume`/`trigger` are body-less POSTs** (no JSON body sent).
 - **`delete` maps `{ok: true}` → `true`** (the only endpoint not returning a job).
 - **Surprising error mapping to document + test:** `create`/`update` with an
@@ -695,7 +695,7 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
 - **`Transport`** is the single chokepoint for HTTP: it owns the `http` gem
   connection, attaches the `Authorization` (and optional `Idempotency-Key`)
   headers, serializes/parses JSON, maps status codes to the error hierarchy,
-  and exposes `get` / `post` / `delete` (`patch` to come). `post` (and
+  and exposes `get` / `post` / `delete` / `patch`. `post` (and
   `stream_post`) take an optional `headers:` for per-request headers (e.g. the
   session-continuity headers) and return a `Transport::Result` (`body` +
   normalized, downcased-key response `headers`); `get` / `delete` return the
