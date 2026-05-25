@@ -315,8 +315,8 @@ module HermesAgent
         end
 
         ##
-        # The outcome of the most recent run, e.g. `"ok"`; `nil` before the
-        # first run.
+        # The outcome of the most recent run: `"ok"` on success or `"error"`
+        # when the run failed; `nil` before the first run.
         # @return [String, nil]
         #
         def last_status
@@ -324,7 +324,9 @@ module HermesAgent
         end
 
         ##
-        # The error detail from the last execution, or `nil` on success.
+        # The error detail from the last execution when {#last_status} is
+        # `"error"`, or `nil` on success. The message is prefixed with the
+        # failing exception class, e.g. `"RuntimeError: Gemini HTTP 400 …"`.
         # @return [String, nil]
         #
         def last_error
