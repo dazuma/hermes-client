@@ -411,7 +411,33 @@ client.responses.stream_create(input:, previous_response_id: nil,
                               conversation: nil, &block)  # streams Response events
 client.responses.get(id)      # GET    /v1/responses/{id}  => Response
 client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
+
+client.responses.conversation                          # => Conversation (id-tracking)
+client.responses.conversation(name: "thread-1")        # => Conversation (named, server-side)
+client.responses.conversation(previous_response_id: id) # resume an id-tracked thread
 ```
+
+- **`conversation`** returns a stateful `Conversation` helper that auto-chains
+  multi-turn dialogue so each turn takes only `input:`. Two mutually exclusive
+  modes (selected at construction): **id-tracking** (default) remembers each
+  turn's response id client-side and threads it as `previous_response_id` into
+  the next turn (seedable via `previous_response_id:` to resume across process
+  restarts); **named** (`name:`) sends a stable `conversation` name each turn
+  and lets the server keep the thread. `#create` / `#stream_create` mirror the
+  resource methods (same return entities, same block-or-enumerator stream
+  contract) and `#last_response_id` is recorded in both modes.
+  - **Streaming id-capture design:** the new turn's id is only known once the
+    terminal `response.completed` arrives, so `Conversation#stream_create`
+    captures it by folding a callback **into the stream's aggregator** (via the
+    doc-private `Responses#stream_response(on_result:)` seam), not via a public
+    settable hook on the returned `Stream`. This makes capture fire exactly when
+    the result is built — identically for the block and enumerator forms — and
+    leaves nothing public for a caller to clobber (a single-slot public hook
+    would be last-writer-wins; even append-only would add public surface for one
+    internal caller). `Stream` and `stream_create`'s public signature are
+    unchanged.
+  - Not thread-safe: a `Conversation` is one sequential thread; issue and (for
+    streaming) consume each turn before the next.
 
 - Server persists conversation state; chain multi-turn either by passing the
   prior `previous_response_id` or a stable `conversation` name.
@@ -762,7 +788,11 @@ running server; several below have been refined that way already.
   404/405. `APIError` parsing must handle all three. A jobs bad-`schedule` is a
   `500` that is really a user-input rejection, so the `>= 500` ServerError body
   is at least partly characterized now.
-- Whether a convenience helper for `conversation` chaining is worth adding.
+- ~~Whether a convenience helper for `conversation` chaining is worth adding.~~
+  **Resolved — implemented** as `client.responses.conversation` (a stateful
+  `Conversation` wrapper; see the responses resource section). Supports both
+  client-side `previous_response_id` tracking (default) and server-side named
+  conversations (`name:`).
 - Retry/backoff policy (none planned for v1 unless the server signals retryable
   conditions).
 
