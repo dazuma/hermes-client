@@ -852,9 +852,9 @@ running server; several below have been refined that way already.
   `/v1/models` returns a **hardcoded single-element** `{object: "list", data:
   [one model]}` (no cursor/limit, never >1 entry); `/api/jobs` returns the full
   `{jobs: [...]}` with no pagination params — only an **undocumented
-  `?include_disabled=true|1`** filter (default **excludes** disabled jobs; the
-  client's `jobs.list` does not pass it, so disabled jobs are invisible to it —
-  a possible future option). There are no list endpoints for runs or responses.
+  `?include_disabled=true|1`** filter (default **excludes** disabled jobs;
+  surfaced as `jobs.list(include_disabled: true)` and verified live). There are
+  no list endpoints for runs or responses.
   The "list endpoints return plain Arrays" convention is permanently safe here.
 - ~~Structured error response shape (for `APIError#error`).~~ Captured above:
   **three** families — OpenAI-style `{error: {...}}` for app-level errors
