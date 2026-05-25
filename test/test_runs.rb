@@ -48,6 +48,20 @@ describe ::HermesAgent::Client::Entities::Run do
       "last_event" => "run.cancelled",
     }
   end
+  # A failed run: like cancelled (no output/usage) plus an error string.
+  let(:failed_run) do
+    {
+      "object" => "hermes.run",
+      "run_id" => "run_0591466636124693b94936a2314f20e5",
+      "status" => "failed",
+      "updated_at" => 1_779_510_798.6846,
+      "created_at" => 1_779_510_796.504134,
+      "session_id" => "run_0591466636124693b94936a2314f20e5",
+      "model" => "hermes-test",
+      "error" => "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. Please pass a valid API key.",
+      "last_event" => "run.failed",
+    }
+  end
 
   it "reads the scalar fields" do
     run = ::HermesAgent::Client::Entities::Run.new(completed_run)
@@ -85,6 +99,23 @@ describe ::HermesAgent::Client::Entities::Run do
     run = ::HermesAgent::Client::Entities::Run.new(cancelled_run)
     assert_nil(run.output)
     assert_nil(run.usage)
+  end
+
+  it "reads the error message and omits output/usage on a failed run" do
+    run = ::HermesAgent::Client::Entities::Run.new(failed_run)
+    assert_equal("failed", run.status)
+    assert_equal(
+      "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. Please pass a valid API key.",
+      run.error
+    )
+    assert_equal("run.failed", run.last_event)
+    assert_nil(run.output)
+    assert_nil(run.usage)
+  end
+
+  it "returns nil error on a non-failed run" do
+    run = ::HermesAgent::Client::Entities::Run.new(completed_run)
+    assert_nil(run.error)
   end
 end
 
@@ -251,6 +282,8 @@ describe ::HermesAgent::Client::Entities::RunEvent do
     assert_equal("terminal", event.tool)
     assert_in_delta(0.42, event.duration)
     assert_equal(false, event.error?)
+    # The boolean tool-result flag does not leak through the string #error reader.
+    assert_nil(event.error)
   end
 
   it "reads a message.delta event" do
@@ -271,6 +304,20 @@ describe ::HermesAgent::Client::Entities::RunEvent do
     assert_equal("Hello", event.output)
     assert_instance_of(::HermesAgent::Client::Entities::RunUsage, event.usage)
     assert_equal(11, event.usage.total_tokens)
+  end
+
+  it "reads a run.failed event's error message as a string" do
+    event = ::HermesAgent::Client::Entities::RunEvent.new(
+      "event" => "run.failed", "run_id" => "run_1", "timestamp" => 1_779_510_796.5,
+      "error" => "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. Please pass a valid API key."
+    )
+    assert_equal("run.failed", event.event)
+    assert_equal(
+      "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. Please pass a valid API key.",
+      event.error
+    )
+    # error? is the tool-result boolean; a run.failed message must not surface there.
+    assert_nil(event.error?)
   end
 
   it "reads an approval.request event" do
@@ -300,6 +347,7 @@ describe ::HermesAgent::Client::Entities::RunEvent do
     assert_nil(event.output)
     assert_nil(event.tool)
     assert_nil(event.error?)
+    assert_nil(event.error)
     assert_nil(event.pattern_keys)
     assert_nil(event.choices)
   end

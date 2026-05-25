@@ -44,8 +44,9 @@ module HermesAgent
       # progress is tracked by polling ({Resources::Runs#get}) or subscribing to
       # the event stream. {#output} and {#usage} are populated only once the run
       # reaches a terminal `completed` status, and are absent before then and on
-      # a `cancelled` run — so both readers tolerate a missing value. Field
-      # readers are best-effort; {#to_h} remains the source of truth.
+      # a `cancelled` or `failed` run — so both readers tolerate a missing
+      # value. A `failed` run instead carries an {#error} message. Field readers
+      # are best-effort; {#to_h} remains the source of truth.
       #
       class Run < Entity
         ##
@@ -130,6 +131,17 @@ module HermesAgent
         end
 
         ##
+        # The failure message on a `failed` run (the upstream error, e.g. a
+        # model/provider error). Present only when {#status} is `"failed"`;
+        # `nil` otherwise. A failed run otherwise looks like a cancelled one —
+        # {#output} and {#usage} are absent.
+        # @return [String, nil]
+        #
+        def error
+          self["error"]
+        end
+
+        ##
         # The token usage, wrapped in a {RunUsage}. Present once the run
         # completes; returns `nil` when the field is absent (before terminal, or
         # on a cancelled run).
@@ -177,8 +189,9 @@ module HermesAgent
       # head frame; it begins at the first content event. Which other readers
       # are meaningful depends on {#event}; the rest return `nil`. Observed
       # types: `tool.started`/`tool.completed`, `message.delta`,
-      # `reasoning.available`, the terminal `run.completed`/`run.cancelled`
-      # (`run.failed` presumed), and `approval.request`/`approval.responded`.
+      # `reasoning.available`, the terminal `run.completed`/`run.cancelled`/
+      # `run.failed` (the last carries an {#error} string), and
+      # `approval.request`/`approval.responded`.
       #
       class RunEvent < Entity
         ##
@@ -249,10 +262,26 @@ module HermesAgent
         # Whether the tool reported an error on a `tool.completed` event. This
         # is the tool *result* signal, not a lifecycle marker: a failed command
         # — or a denied approval — reports `true` yet the run can still complete.
+        # Returns `nil` when there is no boolean flag (the field is absent, or
+        # the event is a `run.failed` whose `error` is a message string — read
+        # that via {#error}).
         # @return [boolean, nil]
         #
         def error?
-          self["error"]
+          value = self["error"]
+          value if [true, false].include?(value)
+        end
+
+        ##
+        # The failure message on a `run.failed` event (a string — the upstream
+        # error). `nil` on any other event, including a `tool.completed` whose
+        # `error` is the boolean result flag (read that via {#error?}). The two
+        # readers split the overloaded `error` payload field by type.
+        # @return [String, nil]
+        #
+        def error
+          value = self["error"]
+          value if value.is_a?(::String)
         end
 
         ##
