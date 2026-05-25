@@ -94,6 +94,12 @@ module HermesAgent
         result(@response)
       end
 
+      def patch(path, body)
+        @requested_path = path
+        @requested_body = body
+        @response
+      end
+
       def delete(path)
         @requested_path = path
         @response

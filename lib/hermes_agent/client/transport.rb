@@ -75,6 +75,24 @@ module HermesAgent
       end
 
       ##
+      # Issue a PATCH request with a JSON body and return the parsed JSON body.
+      #
+      # Like {#get} and {#delete}, this returns the bare parsed body rather than
+      # a {Result}: no PATCH endpoint surfaces response headers the caller needs.
+      #
+      # @param path [String] The request path, including any prefix such as
+      #     `/v1` or `/api` (resources own their prefixes).
+      # @param body [Hash] The request body, serialized to JSON. The
+      #     `Content-Type: application/json` header is set automatically.
+      # @return [Hash] The parsed response body, with string keys.
+      # @raise [APIError] If the server returns a non-2xx response.
+      #
+      def patch(path, body)
+        response = request { client.patch(url_for(path), json: body) }
+        handle(response)
+      end
+
+      ##
       # Issue a DELETE request and return the parsed JSON body.
       #
       # @param path [String] The request path, including any prefix such as

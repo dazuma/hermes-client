@@ -151,6 +151,32 @@ describe ::HermesAgent::Client::Transport do
     assert_equal("Response not found: resp_x", error.message)
   end
 
+  it "issues a PATCH with a JSON body and parses the JSON response into the bare body" do
+    stub = stub_request(:patch, "https://example.test/api/jobs/0ec925dc7192")
+           .with(headers: {"Content-Type" => %r{application/json}}, body: '{"name":"renamed"}')
+           .to_return(status: 200, body: '{"job":{"id":"0ec925dc7192","name":"renamed"}}')
+    result = transport(base_url: "https://example.test").patch("/api/jobs/0ec925dc7192", {name: "renamed"})
+    assert_equal({"job" => {"id" => "0ec925dc7192", "name" => "renamed"}}, result)
+    assert_requested(stub)
+  end
+
+  it "sends the bearer Authorization header on a patch" do
+    stub = stub_request(:patch, "https://example.test/api/jobs/0ec925dc7192")
+           .with(headers: {"Authorization" => "Bearer secret"})
+           .to_return(status: 200, body: "{}")
+    transport(base_url: "https://example.test", api_key: "secret").patch("/api/jobs/0ec925dc7192", {name: "x"})
+    assert_requested(stub)
+  end
+
+  it "maps a patch error response to the status-mapped APIError" do
+    body = '{"error":{"message":"Invalid API key","type":"invalid_request_error"}}'
+    stub_request(:patch, "https://example.test/api/jobs/x").to_return(status: 401, body: body)
+    error = assert_raises(::HermesAgent::Client::AuthenticationError) do
+      transport(base_url: "https://example.test").patch("/api/jobs/x", {name: "x"})
+    end
+    assert_equal("Invalid API key", error.message)
+  end
+
   # Build a transport whose HTTP client returns a successful (200) response
   # whose body yields the given chunks and then, if raise_error is given,
   # raises it mid-iteration (simulating a socket/timeout failure that occurs
