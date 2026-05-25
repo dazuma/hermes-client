@@ -18,10 +18,19 @@ module HermesAgent
       ##
       # Wrap a parsed JSON payload. The payload and the entity are frozen.
       #
+      # A `nil` `data` is coerced to an empty hash, so an entity built from a
+      # missing envelope (e.g. a response that lacks the nested key a resource
+      # extracts) degrades to a reader-returns-`nil` entity rather than raising
+      # an opaque `NoMethodError` on the first read. This matches the
+      # "best-effort readers over a frozen payload" model the readers already
+      # use for absent fields. A non-`nil`, non-Hash payload is kept as-is (the
+      # streaming path wraps arbitrary parsed JSON, including arrays, in the
+      # base entity and reads it back via {#to_h}).
+      #
       # @param data [Hash] The parsed response body, with string keys.
       #
       def initialize(data)
-        @data = data.freeze
+        @data = (data.nil? ? {} : data).freeze
         freeze
       end
 

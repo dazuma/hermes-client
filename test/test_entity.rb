@@ -19,6 +19,20 @@ describe ::HermesAgent::Client::Entity do
     assert_nil(entity["missing"])
   end
 
+  describe "missing or non-Hash payload" do
+    it "coerces a nil payload to an empty hash so readers return nil cleanly" do
+      entity = ::HermesAgent::Client::Entity.new(nil)
+      assert_equal({}, entity.to_h)
+      assert_nil(entity["anything"])
+      assert_predicate(entity, :frozen?)
+    end
+
+    it "keeps a non-nil, non-Hash payload as-is (the streaming path wraps arrays)" do
+      entity = ::HermesAgent::Client::Entity.new([1, 2])
+      assert_equal([1, 2], entity.to_h)
+    end
+  end
+
   describe "immutability" do
     it "freezes the entity and its payload" do
       assert_predicate(entity, :frozen?)
