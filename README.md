@@ -1,6 +1,51 @@
 # Hermes-Client
 
-`hermes-client` is a client library for the Hermes Agent API Server.
+`hermes-client` is a Ruby client library for the Hermes Agent API Server.
+
+## Getting started
+
+Install the gem using
+
+```sh
+gem install hermes-client
+```
+
+Or add it to your bundle:
+
+```ruby
+# In your Gemfile
+gem "hermes-client"
+```
+
+Create and use a client object:
+
+```ruby
+require "hermes-client"
+
+# Create a new client and point it at a Hermes Gateway server
+hermes_client = HermesAgent::Client.new(
+  base_url: "http://localhost:8642",
+  api_key: "my-key-12345678"
+)
+
+# Send chat messages to the gateway
+response = hermes_client.responses.create(input: "Tell me a joke.")
+puts response.output_text
+
+# Manage jobs
+briefing_job = hermes_client.jobs.create(
+  name: "daily-briefing",
+  schedule: "every morning at 8am",
+  prompt: "Collect the day's news and email me a summary."
+)
+puts "Daily-briefing will next run at #{briefing_job.next_run_at}"
+```
+
+For more information, see the
+[Hermes Gateway API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server).
+
+Full API documentation is available at https://dazuma.github.io/hermes-client
+for released gems.
 
 ## Contributing
 
@@ -9,12 +54,23 @@ Development is done in GitHub at https://github.com/dazuma/hermes-client.
  *  To file issues: https://github.com/dazuma/hermes-client/issues.
  *  For questions and discussion, please do not file an issue. Instead, use the
     discussions feature: https://github.com/dazuma/hermes-client/discussions.
- *  Pull requests are welcome, but in general please open an issue first before
-    contributing significant changes.
+ *  Before opening any non-trivial pull request, please report a bug or feature
+    request using an issue.
 
 The library uses [toys](https://dazuma.github.io/toys) for testing and CI. To
 run the test suite, `gem install toys` and then run `toys ci`. You can also run
 unit tests, rubocop, and build tests independently.
+
+As of late May, 2026, the documentation provided by Hermes is fairly thin, and
+the developer had to cobble together an understanding of the API interfaces and
+protocols from various sources, including the Hermes source and empirical
+probing of a live gateway. Documents related to our findings are available in
+the `devdocs` directory, and some Toys-based probing tools are also included in
+this repository. (These are not included in the gem distribution.)
+
+Most of the heavy lifting in the original implementation and documentation, as
+well as the research behind it into the actual behavior of the gateway API, was
+done in close collaboration with Claude Code (Opus 4.7).
 
 ## License
 
