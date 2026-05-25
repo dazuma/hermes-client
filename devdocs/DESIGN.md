@@ -390,6 +390,10 @@ client.chat.stream_create(messages:, session_id:, session_key:, &block)
 - OpenAI-compatible on the wire; additional sampling params flow through.
 - No `model` field is sent (server configures the model; it ignores a
   client-supplied one). Callers can still pass one via `**extra`.
+- The OpenAI `n` parameter (multiple choices) is **ignored** by the server —
+  it always returns a single `choices[0]` (probed 2026-05-24; see the
+  single-choice note under "Known limitations"). The client models a single
+  choice accordingly.
 - Observed (probed against `hermes-test`) non-streaming response: `{ id:
   "chatcmpl-…", object: "chat.completion", created, model, choices: [{ index,
   message: { role, content }, finish_reason }], usage: { prompt_tokens,
@@ -798,12 +802,22 @@ running server; several below have been refined that way already.
 
 Known limitations in the current streaming implementation (deferred, revisit):
 
-- **Chat stream aggregation assumes a single choice.**
-  `ChatCompletion.from_chunks` reconstructs only `choices[0]` (it concatenates
-  every chunk's `delta.content` into one message). A multi-choice stream
-  (`n > 1`) would need the chunks grouped by `choices[].index` before
-  assembling one message per choice. Not yet handled — confirm whether the
-  server ever emits `n > 1` and, if so, generalize the aggregator.
+- **Chat aggregation/readers assume a single choice — verified safe against
+  `hermes-test`.** `ChatCompletion.from_chunks` reconstructs only `choices[0]`
+  (concatenating every chunk's `delta.content` into one message), and the
+  per-chunk readers (`ChatCompletionChunk#delta`/`#role`/`#finish_reason`) read
+  `choices.first` too. **Probed (2026-05-24):** the gateway **ignores the
+  OpenAI `n` parameter**. Tested both non-streaming and streaming, `n` up to 5,
+  and — to rule out a deterministic prompt collapsing to one answer — with
+  open-ended creative prompts at high temperature (1.2–1.3); every case
+  returned a single `choices[0]` with no `index > 0`. So the single-choice
+  assumption is not exercised by this server, and the aggregator is
+  intentionally **left un-generalized** (grouping chunks by `choices[].index`
+  would be speculative work against an unused surface). If a future deployment
+  honors `n`, the raw per-choice data is still reachable via the enumerator form
+  (each `ChatCompletionChunk#to_h` retains the full `choices` array); only then
+  generalize the aggregator and per-chunk readers to emit one message per
+  choice.
 
 Resolved (were known limitations):
 
