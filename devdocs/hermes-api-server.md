@@ -341,14 +341,211 @@ deliberately skipped for their session/config side effects, but the server
 accepts all four as valid choices.)
 
 ### Jobs API (background scheduled work) — note the `/api` prefix, not `/v1`
-- **GET `/api/jobs`** — list scheduled jobs.
-- **POST `/api/jobs`** — create a scheduled job.
-- **GET `/api/jobs/{job_id}`** — fetch a job definition.
-- **PATCH `/api/jobs/{job_id}`** — update job fields.
-- **DELETE `/api/jobs/{job_id}`** — remove a job.
-- **POST `/api/jobs/{job_id}/pause`** — pause without deleting.
-- **POST `/api/jobs/{job_id}/resume`** — resume a paused job.
-- **POST `/api/jobs/{job_id}/run`** — trigger immediate execution.
+
+A lightweight CRUD surface for **scheduled / background agent runs** — cron-like
+recurring tasks, one-shot deferred tasks, and watchdog scripts. Per the docs the
+create body "accepts the same shape as `hermes cron`"; field semantics below
+were confirmed against the `hermes cron create --help` CLI and live probing.
+
+- **GET `/api/jobs`** — list scheduled jobs. Returns `{"jobs": [ <job>, … ]}`.
+- **POST `/api/jobs`** — create a scheduled job. Returns `{"job": <job>}`.
+- **GET `/api/jobs/{job_id}`** — fetch a job definition + last-run state.
+  Returns `{"job": <job>}`.
+- **PATCH `/api/jobs/{job_id}`** — partial update; sent fields are merged onto
+  the existing job. Returns the full `{"job": <job>}`.
+- **DELETE `/api/jobs/{job_id}`** — remove a job (also cancels any in-flight
+  run). Returns `{"ok": true}` — **not** a job entity.
+- **POST `/api/jobs/{job_id}/pause`** — pause without deleting. Returns
+  `{"job": <job>}` (now `state:"paused"`, `enabled:false`).
+- **POST `/api/jobs/{job_id}/resume`** — resume a paused job. Returns
+  `{"job": <job>}` with `next_run_at` recomputed from the resume time.
+- **POST `/api/jobs/{job_id}/run`** — trigger out of schedule. Returns
+  `{"job": <job>}`. **Asynchronous:** it advances `next_run_at` to "now" for the
+  scheduler's next tick rather than running synchronously — `last_run_at` /
+  `last_status` / `repeat.completed` are *not* updated by the time the call
+  returns. (CLI desc: "Run a job on the next scheduler tick.")
+
+> **Not in `/v1/capabilities`.** Unlike the runs endpoints, the jobs endpoints
+> are **not** advertised in the capabilities `endpoints` map or `features` flags
+> (re-checked 2026-05-24). They live on a separate `/api` surface; discover them
+> from the docs / this file, not from capabilities.
+
+**Auth:** same bearer token as the rest of the server.
+
+#### Error format — MIXED (a gotcha for the Transport error layer)
+
+The jobs path serves **two different error envelopes** depending on the layer
+that rejects the request — a client error-mapper built only for the `/v1`
+nested shape will mis-parse the business errors:
+
+- **Auth (401) uses the SAME nested `/v1`-style envelope** as the rest of the
+  server (enforced by middleware *above* the jobs handler). Both a missing and a
+  wrong bearer token return `401` with
+  `{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"invalid_api_key"}}`.
+  So `401`→`AuthenticationError` keys on status as usual and even parses with the
+  existing nested parser.
+- **Jobs business errors (400 / 404 / 500) use a FLAT string** envelope
+  `{"error": "<message>"}` — no `type`/`code`/`param`. Observed (2026-05-24):
+
+| Status | Body | Trigger |
+|--------|------|---------|
+| `400 Bad Request` | `{"error": "Invalid job ID format"}` | id not 12 hex chars (e.g. `nonexistent123`). |
+| `404 Not Found` | `{"error": "Job not found"}` | well-formed but unknown id (GET / run / etc.). |
+| `400 Bad Request` | `{"error": "Name is required"}` | create with no `name` (validated **first**, before schedule). |
+| `400 Bad Request` | `{"error": "Schedule is required"}` | create with `name` but no `schedule`. |
+| `500 Internal Server Error` | `{"error": "Invalid schedule '…'. Use:\n  - Duration: '30m', …"}` | create with an unparseable `schedule` string (note: **500**, not 400; message lists the accepted schedule syntaxes). |
+
+So `APIError`'s message extraction must accept **either** a nested
+`error.message` (auth) **or** a flat string `error` (jobs business errors). Note
+the validation `500` is a normal user-input rejection here, not a server fault.
+
+#### PATCH, deliver, and pause/resume edge behavior (verified 2026-05-24)
+
+- **PATCH mutates the full create-able field set**, not just `prompt`: a single
+  PATCH changed `name`, `repeat`, `deliver`, **and** `schedule` together — the
+  new schedule string was **re-parsed** (interval → cron) and `next_run_at`
+  **recomputed** to the next occurrence. (Override fields stay ignored — see the
+  create-request warning.)
+- **`deliver` is NOT validated at create/patch:** a bogus `"deliver":"not-a-target"`
+  was accepted and stored verbatim with `200`. Any delivery-target validation
+  happens at delivery time, not on write — don't expect a `400` for a bad target.
+- **`pause`/`resume` are idempotent:** pausing an already-`paused` job and
+  resuming an already-`scheduled` job both return `200` with the job in the
+  expected state (no error).
+
+#### Job entity (observed 2026-05-24, `hermes-test`)
+
+Create/get/list/patch/pause/resume/run all return this same object (singular
+under `"job"`, list under `"jobs"`). The `id` is **12 lowercase hex chars** (no
+`run_`-style prefix), e.g. `0ec925dc7192`.
+
+```json
+{
+  "id": "0ec925dc7192",
+  "name": "Hello world",
+  "prompt": "Say \"hello world\" in a creative way.",
+  "skills": [],
+  "skill": null,
+  "model": null,
+  "provider": null,
+  "base_url": null,
+  "script": null,
+  "no_agent": false,
+  "context_from": null,
+  "schedule": { "kind": "cron", "expr": "0 9 * * *", "display": "0 9 * * *" },
+  "schedule_display": "0 9 * * *",
+  "repeat": { "times": null, "completed": 2 },
+  "enabled": true,
+  "state": "scheduled",
+  "paused_at": null,
+  "paused_reason": null,
+  "created_at": "2026-05-22T11:51:06.929692-07:00",
+  "next_run_at": "2026-05-25T09:00:00-07:00",
+  "last_run_at": "2026-05-24T09:00:27.846643-07:00",
+  "last_status": "ok",
+  "last_error": null,
+  "last_delivery_error": null,
+  "deliver": "local",
+  "origin": null,
+  "enabled_toolsets": null,
+  "workdir": null,
+  "profile": null
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string | 12-hex job id. |
+| `name` | string | Human-friendly name. **Required on create.** |
+| `prompt` | string\|null | The task instruction. Optional (a `--no-agent` script job needs none). |
+| `skills` | array | Attached skill names (`--skill`, repeatable). `skill` (singular) is a separate scalar slot, `null` when unused. |
+| `model` / `provider` / `base_url` | string\|null | Per-job LLM override ("provider override" in the docs). All `null` = use the profile's configured model. **Read-only via this API** — ignored in create/PATCH bodies (see the create-request warning). |
+| `script` | string\|null | Path under `~/.hermes/scripts/`. Default: script stdout is injected into the agent prompt each run. |
+| `no_agent` | boolean | Skip the LLM entirely — run `script` and deliver its stdout verbatim (watchdog pattern). |
+| `context_from` | string\|null | (Unprobed.) Source to pull run context from. |
+| `schedule` | object | Tagged-union by `kind` — see below. |
+| `schedule_display` | string | Human-readable schedule (mirrors `schedule.display`). |
+| `repeat` | object | `{ "times": <int\|null>, "completed": <int> }`. `times` = max runs (`null` = unbounded / from `--repeat`); `completed` increments per executed run. |
+| `enabled` | boolean | `false` while paused. |
+| `state` | string | Lifecycle: `scheduled` ↔ `paused` observed; see below. |
+| `paused_at` | string\|null | ISO-8601 timestamp set on pause, cleared on resume. |
+| `paused_reason` | string\|null | Optional reason; `null` for manual pause. |
+| `created_at` / `next_run_at` / `last_run_at` | string\|null | **ISO-8601 with offset** (e.g. `…-07:00`), *not* the epoch-float style the runs API uses. `last_run_at` is `null` until the first execution. |
+| `last_status` | string\|null | Outcome of the last run (`"ok"` observed); `null` before first run. |
+| `last_error` / `last_delivery_error` | string\|null | Error detail from the last execution / delivery attempt. |
+| `deliver` | string | Delivery target: `origin`, `local`, `telegram`, `discord`, `signal`, or `platform:chat_id`. **Defaults to `"local"`** when omitted on create. |
+| `origin` | object\|null | Originating channel info (for `deliver:"origin"`); `null` for locally created jobs. |
+| `enabled_toolsets` | array\|null | Toolset allowlist; `null` = default set. (Unprobed.) |
+| `workdir` | string\|null | Absolute cwd for the run; injects `AGENTS.md`/`CLAUDE.md`/`.cursorrules` from there. `null` = no project context. |
+| `profile` | string\|null | Hermes profile to run under; `null` = scheduler's existing profile. |
+
+#### Schedule object (`schedule` is a tagged union on `kind`)
+
+The create `schedule` string is parsed into one of three stored shapes. The
+parser accepts four input syntaxes (per the 500 error message) that map to these
+three kinds:
+
+| `kind` | Stored fields | Created from (input syntax) |
+|--------|---------------|------------------------------|
+| `once` | `run_at` (ISO-8601), `display` | a bare **duration** `"30m"` / `"2h"` / `"1d"` (→ `run_at` = now + duration, `display:"once in 30m"`), **or** an absolute **timestamp** `"2027-02-03T14:00:00"` (`display:"once at 2027-02-03 14:00"`). One-shot. |
+| `interval` | `minutes` (int), `display` | `"every 30m"` / `"every 2h"` (→ `minutes`, `display:"every 120m"`). Recurring. |
+| `cron` | `expr` (string), `display` | a cron expression `"0 9 * * *"` (`expr` == `display`). Recurring. |
+
+#### Create request (POST `/api/jobs`)
+
+Body keys mirror `hermes cron create` flags. **Confirmed accepted:** `name`
+(required), `schedule` (required, the syntaxes above), `prompt`, `repeat`
+(integer), `deliver`. CLI-backed and presumably accepted (not individually
+re-probed): `skills`/`skill`, `script`, `no_agent`. Create returns
+**HTTP `200`** (not the runs API's `202`) with `{"job": <job>}`; new jobs start
+`state:"scheduled"`, `enabled:true`, `repeat.completed:0`, `last_*` null.
+
+> ⚠️ **`model`, `provider`, `base_url`, `workdir`, `profile`, and `context_from`
+> are NOT settable via the API** (verified 2026-05-24): passing them in either
+> the **create** body *or* a **PATCH** body is silently ignored — the fields
+> stay `null` in the response (no error). The entity exposes these slots, but the
+> HTTP API does not populate them under these key names; they appear to be
+> CLI/config-only (`hermes cron create --workdir/--profile`, etc.). A client must
+> not assume a job it creates can carry a per-job model/provider override or
+> working directory through this API.
+
+Minimal example:
+
+```sh
+toys gateway probe POST /api/jobs \
+  --body '{"name":"probe","schedule":"every 2h","prompt":"do a thing"}'
+```
+
+#### Status lifecycle (run behavior verified live 2026-05-24)
+
+- `scheduled` — active, waiting for `next_run_at`.
+- `paused` — via `/pause`; sets `enabled:false` + `paused_at`. `/resume` returns
+  it to `scheduled`, clears `paused_at`, and recomputes `next_run_at`.
+- **There is no lingering terminal `state` — exhausted jobs are DELETED.** This
+  was the key live finding, and it matters for the client:
+  - A **`once` job is removed after it fires.** After its single run the job is
+    gone: `GET /api/jobs/{id}` returns `404 Job not found` and it drops off the
+    list. There is no `completed`/`done` state to observe.
+  - A **capped recurring job** (`repeat.times` set) **runs `times` times, then is
+    removed.** Verified with a `repeat:2` interval job: after run #1 it survived
+    (`completed:1`, `state:"scheduled"`, `enabled:true`); after run #2 reached the
+    cap it was deleted (`404`). A `repeat:1` job likewise vanished after one run.
+  - An **uncapped recurring job** (`repeat.times: null`) just increments
+    `repeat.completed` and stays `scheduled`, with `next_run_at` recomputed to the
+    next occurrence. (Observed on the "Hello world" cron job: `completed` 2→3,
+    `last_run_at` updated, `last_status:"ok"`, `state` stayed `scheduled`.)
+- **A successful run** sets `last_run_at` (ISO-8601), `last_status:"ok"`, leaves
+  `last_error`/`last_delivery_error` `null`, and bumps `repeat.completed`.
+  `last_status` is the signal for the most recent run's outcome. (A failing-run
+  `last_status`/`last_error` shape was **not** probed — would need a deliberately
+  broken job.)
+- **`/run` is asynchronous and so is the scheduler.** `/run` advances
+  `next_run_at` to "now"; the gateway's in-process scheduler (`hermes cron status`
+  → "Gateway is running — cron jobs will fire automatically") then picks the job
+  up on a later tick — a pong run took on the order of ~20s to land after `/run`,
+  not instant. The scheduler also **fires overdue jobs on startup**: a job whose
+  persisted `next_run_at` was already in the past ran shortly after the gateway
+  came up, then recomputed its next occurrence.
 
 ### Model discovery
 - **GET `/v1/models`** — lists the agent as an available model; the id defaults

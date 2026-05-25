@@ -7,8 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This gem is under active development. The client is built out resource by
 resource: the `health`, `capabilities`, `models`, `chat` (incl. streaming),
 `responses` (incl. streaming), and `runs` resources are implemented; `jobs` is
-the main resource still to build (and its wire format needs probing first). The
-tooling, packaging, and CI are fully set up.
+the main resource still to build. Its wire format has now been **probed and
+fully documented** (entity shape, schedule union, lifecycle, mixed error
+envelope, and the locked `trigger`/`404` design decisions — see the Jobs
+sections of `devdocs/DESIGN.md` and `devdocs/hermes-api-server.md`); it is ready
+to implement straight from those docs. The tooling, packaging, and CI are fully
+set up.
 
 **Read [`devdocs/DESIGN.md`](devdocs/DESIGN.md) first.** It specifies the
 conventions, namespacing, resource API, return-value/streaming/error models,

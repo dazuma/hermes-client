@@ -544,20 +544,102 @@ backend — container backends skip the checks):
 ### `client.jobs` — Jobs API (scheduled background work, under `/api/jobs`)
 
 ```ruby
-client.jobs.list                  # GET    /api/jobs               => [Job]
-client.jobs.create(...)           # POST   /api/jobs               => Job
-client.jobs.get(job_id)           # GET    /api/jobs/{id}          => Job
-client.jobs.update(job_id, ...)   # PATCH  /api/jobs/{id}          => Job
-client.jobs.delete(job_id)        # DELETE /api/jobs/{id}
-client.jobs.pause(job_id)         # POST   /api/jobs/{id}/pause
-client.jobs.resume(job_id)        # POST   /api/jobs/{id}/resume
-client.jobs.run(job_id)           # POST   /api/jobs/{id}/run      (run now)
+client.jobs.list                              # GET    /api/jobs          => [Job]
+client.jobs.create(name:, schedule:,          # POST   /api/jobs          => Job
+                   prompt: nil, repeat: nil, deliver: nil,
+                   skills: nil, script: nil, no_agent: nil)
+client.jobs.get(job_id)                       # GET    /api/jobs/{id}      => Job
+client.jobs.update(job_id,                    # PATCH  /api/jobs/{id}      => Job
+                   name: nil, schedule: nil, prompt: nil, repeat: nil,
+                   deliver: nil, skills: nil, script: nil, no_agent: nil)
+client.jobs.delete(job_id)                    # DELETE /api/jobs/{id}      => true (server: {ok:true})
+client.jobs.pause(job_id)                     # POST   /api/jobs/{id}/pause  => Job
+client.jobs.resume(job_id)                    # POST   /api/jobs/{id}/resume => Job
+client.jobs.trigger(job_id)                   # POST   /api/jobs/{id}/run    => Job (fire out-of-schedule)
 ```
+
+(Plus `**extra` on `create`/`update`, per the request-parameter convention —
+omit nil fields from the body. Do **not** add `model:`/`provider:`/`base_url:`/
+`workdir:`/`profile:`/`context_from:` params — the API ignores them, see below.)
 
 - Note these live under `/api/jobs`, not `/v1` — `Jobs` carries its own prefix.
 - The Jobs endpoints were **not** present in the `hermes-test`
   `/v1/capabilities` advertisement, so they may be gated, versioned separately,
   or absent in some builds — confirm against a server that exposes them.
+
+**Locked design decisions (2026-05-24):**
+
+- **`trigger`, not `run`, for `POST /api/jobs/{id}/run`.** Matches the docs page's
+  own verb ("Trigger the job to run immediately") and avoids colliding with the
+  `runs` resource's vocabulary. The call is **asynchronous** — it advances the
+  job's `next_run_at` to "now" for the scheduler's next tick and returns the
+  `Job`; it does **not** block on or return the run's result.
+- **`get` on a reaped job raises `NotFoundError` like any 404 — no special
+  "gone" return.** One-shot (`once`) jobs and `repeat.times`-capped jobs are
+  **deleted by the server once exhausted** (verified live: a `once` job is gone
+  after its single fire; a `repeat:2` job survived run #1 then vanished after run
+  #2). There is no terminal job *state* to observe — `GET` simply starts
+  returning `404 Job not found`. Document this on `get`/`trigger`: a client
+  cannot poll a one-shot or final-run job for its outcome after it completes.
+
+**Wire details confirmed by probing (see `hermes-api-server.md` for the full
+writeup):**
+
+- `create` **requires** `name` and `schedule`; also accepts `prompt`, `repeat`
+  (int), `deliver`, `skills`/`skill`, `script`, `no_agent`. `schedule` is a
+  string parsed server-side into a tagged-union (`once`/`interval`/`cron`).
+  Returns **`200`** (not the runs `202`).
+- `update` (PATCH) is a partial merge over the same writable fields and
+  **re-parses `schedule`** (recomputing `next_run_at`).
+- **`model`/`provider`/`base_url`/`workdir`/`profile`/`context_from` are NOT
+  writable via this API** — silently ignored in create/PATCH (stay `null`). Do
+  not expose them as `create`/`update` params; they are read-only entity readers.
+- **Mixed error envelope:** auth `401` is the nested `/v1` shape
+  (`{error:{message,type,code}}`); jobs business errors (`400`/`404`/`500`) are a
+  **flat** `{error: "<string>"}`. `APIError` parsing must accept both. (Bad
+  `schedule` is a `500`; bad `deliver` is **not** validated on write.)
+- `pause`/`resume` are idempotent (no error when already in the target state).
+
+**`Job` entity modeling** (follow [[entity-conventions]] — a reader for every
+field in the entity table in `hermes-api-server.md`; here are the resource-
+specific decisions that convention alone doesn't settle):
+
+- Wrap the two nested objects as their own prefixed sub-entities (one file,
+  `entities/job.rb`, holds all three — as `run.rb` holds `Run`/`RunUsage`/etc.):
+  - **`JobSchedule`** for `schedule` — a **tagged union on `kind`**, modeled the
+    way `RunEvent` handles its heterogeneous `event` field: one wrapper with a
+    `kind` reader, `once?`/`interval?`/`cron?` predicates, `display`, and a
+    reader for each kind's payload (`run_at`, `minutes`, `expr`) that is `nil`
+    when not of that kind. (Do **not** make polymorphic subclasses.)
+  - **`JobRepeat`** for `repeat` — `times` (nullable) and `completed`.
+- **`origin` and `enabled_toolsets` were never observed populated** (always
+  `null`), so their element shapes are unknown. Do **not** invent empty wrapper
+  classes for them — follow the `Model#permission` precedent: expose them as
+  plain passthrough readers (raw value / `nil`), with `#to_h` / `#[]` as the
+  escape hatch if a real shape ever appears. `enabled_toolsets`, if it ever
+  populates, is expected to be a plain array (names), not objects.
+- Boolean readers `enabled?` / `no_agent?` (per the boolean-reader convention).
+- **Timestamps stay strings.** `created_at` / `next_run_at` / `last_run_at` /
+  `paused_at` are **ISO-8601 strings with offset** — unlike the runs/responses
+  epoch-float timestamps. Expose them verbatim (no Time parsing); just note the
+  format difference so no one assumes the runs convention.
+- `#id` is the natural reader for the `id` field (no aliasing needed — contrast
+  `Run#id`, which aliases `run_id`).
+
+**Implementation notes for the resource:**
+
+- **`Transport#patch` must be added** (it's the "(patch to come)" item under
+  Internal layering), plus `FakeTransport#patch`. No jobs endpoint returns
+  session-continuity headers, so `patch` can return the **bare parsed body**
+  (like `get`/`delete`), not a `Transport::Result`. `create`/`pause`/`resume`/
+  `trigger` go through `post`; just take `.body` off its `Result`.
+- **`pause`/`resume`/`trigger` are body-less POSTs** (no JSON body sent).
+- **`delete` maps `{ok: true}` → `true`** (the only endpoint not returning a job).
+- **Surprising error mapping to document + test:** `create`/`update` with an
+  unparseable `schedule` raises **`ServerError` (500)**, not `BadRequestError`,
+  even though it's really invalid input (see the mixed-envelope note). The other
+  validation failures (missing `name`/`schedule`, bad id) are the expected
+  `400`/`404`. Note this in the method YARD so callers aren't surprised.
 
 ### `client.models` / `client.capabilities` — discovery (`/v1`)
 
@@ -654,12 +736,15 @@ running server; several below have been refined that way already.
 
 - Exact request bodies and response field names for each endpoint. Discovery,
   chat completions, the Responses API (create/get/delete/stream, incl. the
-  non-streaming, deletion, and tool-item output shapes), and the **Runs API**
-  (create body, poll/status, stop, and the full approval workflow) are now
-  mapped (see above); only `jobs` request/response bodies remain largely
-  unknown. Runs leftovers: whether `create` accepts a `model:` field, and the
-  `failed`-status / `run.failed` shape (not reproduced — needs a model/infra
-  failure).
+  non-streaming, deletion, and tool-item output shapes), the **Runs API**
+  (create body, poll/status, stop, and the full approval workflow), and the
+  **Jobs API** (entity shape, schedule union, create/update/delete/pause/resume/
+  trigger, lifecycle, and the mixed error envelope) are now mapped (see above and
+  `hermes-api-server.md`). Runs leftovers: whether `create` accepts a `model:`
+  field, and the `failed`-status / `run.failed` shape (not reproduced — needs a
+  model/infra failure). Jobs leftovers (non-blocking, follow conventions): the
+  populated shapes of `origin` / `enabled_toolsets` (always `null` in samples)
+  and the failing-run `last_status`/`last_error` shape.
 - The full set of SSE event types and payloads. Chat-completion chunks
   (including the custom `hermes.tool.progress` frames), the full Responses API
   event sequence (including the terminal `response.completed`), and the **run
@@ -668,11 +753,15 @@ running server; several below have been refined that way already.
   now captured (above).
 - Whether list endpoints (`jobs`, `models`) paginate or always return full
   arrays. (`models` was observed returning a full `{ object: "list", data }`
-  with no pagination fields.)
+  with no pagination fields; `jobs` returns a bare `{ jobs: [...] }` with no
+  pagination fields either.)
 - ~~Structured error response shape (for `APIError#error`).~~ Captured above:
-  two families (OpenAI-style `{error: {...}}` for app-level errors, bare text
-  for router-level 404/405). Remaining unknown: the `>= 500` ServerError body
-  shape (hard to provoke safely on a live server).
+  **three** families — OpenAI-style `{error: {...}}` for app-level errors
+  **and for auth 401 even on `/api/jobs`**; a **flat `{error: "<string>"}`** for
+  jobs business errors (`400`/`404`/`500`); and bare text for router-level
+  404/405. `APIError` parsing must handle all three. A jobs bad-`schedule` is a
+  `500` that is really a user-input rejection, so the `>= 500` ServerError body
+  is at least partly characterized now.
 - Whether a convenience helper for `conversation` chaining is worth adding.
 - Retry/backoff policy (none planned for v1 unless the server signals retryable
   conditions).
