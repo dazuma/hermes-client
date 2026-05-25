@@ -248,7 +248,8 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
   - The delta events thread an `item_id` (`msg_…`), `output_index`, and
     `content_index`; `response.output_text.delta` carries the incremental
     `delta` string while `response.output_text.done` carries the assembled
-    `text`. (Both also carry a `logprobs` array, empty in the observed turn.)
+    `text`. (Both also carry a `logprobs` array — **hardcoded empty** `[]`
+    server-side, never populated; see the models/logprobs note below.)
   - The `response.output_item.added` / `response.output_item.done` events nest
     the output item under an **`item`** key (`{ id, type, status, role,
     content }`) alongside `output_index` — not under `response`. `added` has
@@ -639,10 +640,15 @@ omit nil fields from the body. Do **not** add `model:`/`provider:`/`base_url:`/
 **Wire details confirmed by probing (see `hermes-api-server.md` for the full
 writeup):**
 
-- `create` **requires** `name` and `schedule`; also accepts `prompt`, `repeat`
-  (int), `deliver`, `skills`/`skill`, `script`, `no_agent`. `schedule` is a
-  string parsed server-side into a tagged-union (`once`/`interval`/`cron`).
-  Returns **`200`** (not the runs `202`).
+- `create` **requires** `name` and `schedule`; the handler also forwards only
+  `prompt`, `repeat` (int), `deliver`, and `skills`. **`script` and `no_agent`
+  are silently dropped** (source-confirmed 2026-05-24: the create handler does
+  not pass them to the underlying `create_job`, so they stay at their defaults —
+  `no_agent: false`, `script: null` — regardless of what is sent). Our client's
+  `create`/`update` still expose `script:`/`no_agent:` as params; treat them as
+  **no-ops on this server** (kept for forward-compat / other deployments). Tighten
+  or document this if it matters. `schedule` is a string parsed server-side into
+  a tagged union (`once`/`interval`/`cron`). Returns **`200`** (not the runs `202`).
 - `update` (PATCH) is a partial merge over the same writable fields and
   **re-parses `schedule`** (recomputing `next_run_at`).
 - **`model`/`provider`/`base_url`/`workdir`/`profile`/`context_from` are NOT
@@ -676,12 +682,15 @@ specific decisions that convention alone doesn't settle):
     reader for each kind's payload (`run_at`, `minutes`, `expr`) that is `nil`
     when not of that kind. (Do **not** make polymorphic subclasses.)
   - **`JobRepeat`** for `repeat` — `times` (nullable) and `completed`.
-- **`origin` and `enabled_toolsets` were never observed populated** (always
-  `null`), so their element shapes are unknown. Do **not** invent empty wrapper
-  classes for them — follow the `Model#permission` precedent: expose them as
-  plain passthrough readers (raw value / `nil`), with `#to_h` / `#[]` as the
-  escape hatch if a real shape ever appears. `enabled_toolsets`, if it ever
-  populates, is expected to be a plain array (names), not objects.
+- **`origin` and `enabled_toolsets` are always `null` via this API** — not by
+  chance but because the create/PATCH handler never reads them from the body
+  (only chat-platform adapters / the in-agent `cronjob` tool set them). Keep
+  them as plain passthrough readers (raw value / `nil`), with `#to_h` / `#[]`
+  as the escape hatch — do **not** invent wrapper classes. For reference, their
+  internal shapes (confirmed from source, not client-observable): `origin` is a
+  dict `{platform, chat_id, thread_id?}` (used for `deliver: "origin"`);
+  `enabled_toolsets` is a plain `Array<String>` of toolset names. So even if a
+  shape ever surfaced, `enabled_toolsets` stays a name array, not objects.
 - Boolean readers `enabled?` / `no_agent?` (per the boolean-reader convention).
 - **Timestamps stay strings.** `created_at` / `next_run_at` / `last_run_at` /
   `paused_at` are **ISO-8601 strings with offset** — unlike the runs/responses
@@ -731,7 +740,13 @@ see more), `GET /v1/capabilities` returns an object with
   advertisement of its routes (see the `runs`/jobs notes above).
 
 `GET /v1/models` returns the OpenAI list shape: `{ object: "list", data: [ {
-id, object: "model", created, owned_by, permission, root, parent } ] }`.
+id, object: "model", created, owned_by, permission, root, parent } ] }`. The
+whole envelope is **hardcoded server-side** to a single model with
+**`permission: []`** (a literal empty array — never populated, so its element
+shape is undiscoverable on this server; this is why `Model#permission` is not
+exposed as a reader). The same applies to the **`logprobs: []`** arrays in the
+chat/Responses output (also hardcoded empty — the server reads no
+`logprobs`/`top_logprobs` request param). Treat both as structurally-always-empty.
 `GET /health` returns `{ "status": "ok", "platform": "hermes-agent" }`.
 
 ### `client.health` — health (root paths, no `/v1`)
@@ -817,18 +832,30 @@ running server; several below have been refined that way already.
   `RuntimeError:` prefix, unlike the run's bare `error`), leaves
   `last_delivery_error` null (the agent failed before delivery), bumps
   `repeat.completed`, and a recurring job **stays `state: "scheduled"`**.
-  Remaining jobs leftover (non-blocking, follow conventions): the populated
-  shapes of `origin` / `enabled_toolsets` (always `null` in samples).
+  ~~Remaining jobs leftover: the populated shapes of `origin` /
+  `enabled_toolsets`.~~ **Resolved from source 2026-05-24** — both are
+  **unreachable via the public API** (the create/PATCH handler forwards only
+  `name`/`schedule`/`prompt`/`deliver`/`skills`/`repeat`, never these), so the
+  client will never see them populated. Internal shapes (for reference, not
+  client-observable): `origin` is a dict `{platform, chat_id, thread_id?}` set
+  only by chat-platform adapters for `deliver: "origin"`; `enabled_toolsets`
+  is a flat `List[String]` of toolset names set via the in-agent `cronjob`
+  tool. The passthrough-no-wrapper modeling stands.
 - The full set of SSE event types and payloads. Chat-completion chunks
   (including the custom `hermes.tool.progress` frames), the full Responses API
   event sequence (including the terminal `response.completed`), and the **run
   events stream** (`tool.*`, `message.delta`, `reasoning.available`,
   `run.completed`/`run.cancelled`, `approval.request`/`approval.responded`) are
   now captured (above).
-- Whether list endpoints (`jobs`, `models`) paginate or always return full
-  arrays. (`models` was observed returning a full `{ object: "list", data }`
-  with no pagination fields; `jobs` returns a bare `{ jobs: [...] }` with no
-  pagination fields either.)
+- ~~Whether list endpoints (`jobs`, `models`) paginate or always return full
+  arrays.~~ **Resolved from source 2026-05-24: neither paginates, structurally.**
+  `/v1/models` returns a **hardcoded single-element** `{object: "list", data:
+  [one model]}` (no cursor/limit, never >1 entry); `/api/jobs` returns the full
+  `{jobs: [...]}` with no pagination params — only an **undocumented
+  `?include_disabled=true|1`** filter (default **excludes** disabled jobs; the
+  client's `jobs.list` does not pass it, so disabled jobs are invisible to it —
+  a possible future option). There are no list endpoints for runs or responses.
+  The "list endpoints return plain Arrays" convention is permanently safe here.
 - ~~Structured error response shape (for `APIError#error`).~~ Captured above:
   **three** families — OpenAI-style `{error: {...}}` for app-level errors
   **and for auth 401 even on `/api/jobs`**; a **flat `{error: "<string>"}`** for
