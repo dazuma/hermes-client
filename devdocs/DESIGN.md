@@ -215,6 +215,7 @@ client = HermesAgent::Client.new(
   api_key:    ENV["HERMES_API_KEY"],    # default source for the bearer token
   timeout:    nil,                       # read timeout (seconds)
   open_timeout: nil,
+  keep_alive_timeout: 5,                 # persistent-connection idle reuse window (seconds)
 )
 ```
 
@@ -230,6 +231,16 @@ end
 Notes:
 - `base_url` is the server root; resources own their path prefixes
   (`/v1/...`, `/api/jobs`, `/health`) since they are not uniform.
+- **Persistent connection.** `Transport` holds a single keep-alive
+  `HTTP::Session` (the `http` gem's `HTTP.persistent`), scoped to the transport
+  instance, so the TCP/TLS handshake happens once and the connection is reused
+  across requests. The `http` gem transparently reopens it when it has been
+  closed by the server, has been idle past the keep-alive window, or a prior
+  request failed. `keep_alive_timeout:` (seconds; default `5`) tunes that idle
+  reuse window — it is passed as `HTTP.persistent`'s `timeout:`, **not** a
+  request timeout (those are `timeout:`/`open_timeout:`). Because the session
+  holds live connection state, the transport — and the `Client` — is **not
+  thread-safe**; use one client per thread.
 - The bearer token is sent as `Authorization: Bearer <api_key>` on every
   request. Default client-side env var is **`HERMES_API_KEY`** (distinct from
   the server's own `API_SERVER_KEY`).

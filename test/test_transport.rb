@@ -193,10 +193,10 @@ describe ::HermesAgent::Client::Transport do
     response.define_singleton_method(:status) { status }
     response.define_singleton_method(:body) { body }
     response.define_singleton_method(:headers) { {} }
-    http_client = Object.new
-    http_client.define_singleton_method(:post) { |*_args, **_kwargs| response }
+    http_session = Object.new
+    http_session.define_singleton_method(:post) { |*_args, **_kwargs| response }
     result = transport(base_url: "https://example.test")
-    result.define_singleton_method(:client) { |**| http_client }
+    result.define_singleton_method(:session) { http_session }
     result
   end
 
@@ -261,5 +261,36 @@ describe ::HermesAgent::Client::Transport do
     assert_raises(::HermesAgent::Client::ConnectionError) do
       transport(base_url: "https://example.test").get("/health")
     end
+  end
+
+  it "scopes a single persistent session to the transport and reuses it across requests" do
+    stub_request(:get, "https://example.test/health").to_return(status: 200, body: "{}")
+    tr = transport(base_url: "https://example.test")
+    tr.get("/health")
+    tr.get("/health")
+    session = tr.send(:session)
+    assert(session.persistent?, "expected the transport to use a persistent session")
+    assert_same(session, tr.send(:session), "expected the session to be memoized (reused)")
+  end
+
+  it "scopes the persistent connection to the transport's origin" do
+    tr = transport(base_url: "https://example.test")
+    assert(tr.send(:session).persistent?)
+    # A second transport gets its own session, so connections are not shared.
+    refute_same(tr.send(:session), transport(base_url: "https://example.test").send(:session))
+  end
+
+  it "applies the configured keep-alive timeout to the persistent session" do
+    tr = transport(base_url: "https://example.test", keep_alive_timeout: 42)
+    assert_equal(42, tr.send(:session).send(:default_options).keep_alive_timeout)
+  end
+
+  it "opens a fresh connection and recovers after a broken one" do
+    stub_request(:get, "https://example.test/health")
+      .to_raise(::HTTP::ConnectionError).then
+      .to_return(status: 200, body: '{"status":"ok"}')
+    tr = transport(base_url: "https://example.test")
+    assert_raises(::HermesAgent::Client::ConnectionError) { tr.get("/health") }
+    assert_equal({"status" => "ok"}, tr.get("/health"))
   end
 end

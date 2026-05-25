@@ -30,6 +30,11 @@ describe ::HermesAgent::Client::Configuration do
     assert_nil(config.open_timeout)
   end
 
+  it "defaults keep_alive_timeout to 5 seconds" do
+    config = config_class.new
+    assert_equal(5, config.keep_alive_timeout)
+  end
+
   it "defaults api_key to nil when HERMES_API_KEY is unset" do
     ENV.delete("HERMES_API_KEY")
     config = config_class.new
@@ -46,18 +51,22 @@ describe ::HermesAgent::Client::Configuration do
     config = config_class.new(base_url: "https://example.test",
                               api_key: "secret",
                               timeout: 30,
-                              open_timeout: 5)
+                              open_timeout: 5,
+                              keep_alive_timeout: 60)
     assert_equal("https://example.test", config.base_url)
     assert_equal("secret", config.api_key)
     assert_equal(30, config.timeout)
     assert_equal(5, config.open_timeout)
+    assert_equal(60, config.keep_alive_timeout)
   end
 
   it "exposes mutable accessors" do
     config = config_class.new
     config.base_url = "https://changed.test"
     config.api_key = "new-key"
+    config.keep_alive_timeout = 90
     assert_equal("https://changed.test", config.base_url)
     assert_equal("new-key", config.api_key)
+    assert_equal(90, config.keep_alive_timeout)
   end
 end

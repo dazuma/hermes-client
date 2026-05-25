@@ -17,6 +17,12 @@ module HermesAgent
       DEFAULT_BASE_URL = "http://127.0.0.1:8642"
 
       ##
+      # The default keep-alive timeout, in seconds.
+      # @return [Numeric]
+      #
+      DEFAULT_KEEP_ALIVE_TIMEOUT = 5
+
+      ##
       # Create a configuration.
       #
       # @param base_url [String] The server root URL, _without_ a path prefix
@@ -28,15 +34,21 @@ module HermesAgent
       #     no client-side limit.
       # @param open_timeout [Numeric, nil] The connection-open timeout in
       #     seconds, or `nil` for no client-side limit.
+      # @param keep_alive_timeout [Numeric] How long, in seconds, an idle
+      #     persistent connection may be reused before it is considered stale
+      #     and reopened on the next request. Defaults to
+      #     {DEFAULT_KEEP_ALIVE_TIMEOUT}.
       #
       def initialize(base_url: DEFAULT_BASE_URL,
                      api_key: ENV.fetch("HERMES_API_KEY", nil),
                      timeout: nil,
-                     open_timeout: nil)
+                     open_timeout: nil,
+                     keep_alive_timeout: DEFAULT_KEEP_ALIVE_TIMEOUT)
         @base_url = base_url
         @api_key = api_key
         @timeout = timeout
         @open_timeout = open_timeout
+        @keep_alive_timeout = keep_alive_timeout
       end
 
       ##
@@ -63,6 +75,13 @@ module HermesAgent
       # @return [Numeric, nil]
       #
       attr_accessor :open_timeout
+
+      ##
+      # How long, in seconds, an idle persistent connection may be reused before
+      # it is considered stale and reopened on the next request.
+      # @return [Numeric]
+      #
+      attr_accessor :keep_alive_timeout
     end
   end
 end

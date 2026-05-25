@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "http/cookie"
-require "http"
-
 require "hermes_agent/client/version"
 require "hermes_agent/client/configuration"
 require "hermes_agent/client/errors"
@@ -31,6 +28,9 @@ module HermesAgent
   #     client = HermesAgent::Client.new(base_url: "http://127.0.0.1:8642")
   #     client.health.check.status  # => "ok"
   #
+  # Note this class is not thread-safe. When using in a multithreaded
+  # application, you should create a separate client object per thread.
+  #
   class Client
     ##
     # Create a client.
@@ -43,14 +43,18 @@ module HermesAgent
     # @param api_key [String, nil] The bearer token. See {Configuration}.
     # @param timeout [Numeric, nil] The read timeout in seconds.
     # @param open_timeout [Numeric, nil] The connection-open timeout in seconds.
+    # @param keep_alive_timeout [Numeric] How long an idle persistent
+    #     connection may be reused before being reopened. See {Configuration}.
     # @yieldparam config [Configuration] The configuration, for customization.
     #
     def initialize(base_url: Configuration::DEFAULT_BASE_URL,
                    api_key: ENV.fetch("HERMES_API_KEY", nil),
                    timeout: nil,
-                   open_timeout: nil)
+                   open_timeout: nil,
+                   keep_alive_timeout: Configuration::DEFAULT_KEEP_ALIVE_TIMEOUT)
       @config = Configuration.new(base_url: base_url, api_key: api_key,
-                                  timeout: timeout, open_timeout: open_timeout)
+                                  timeout: timeout, open_timeout: open_timeout,
+                                  keep_alive_timeout: keep_alive_timeout)
       yield @config if block_given?
       @transport = Transport.new(@config)
     end

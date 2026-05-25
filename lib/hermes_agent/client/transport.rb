@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# Require "http/cookie" explicitly before requiring "http", to avoid a
+# "circular dependency" warning due to the way the "http" gem uses autoload.
+require "http/cookie"
+require "http"
 require "json"
 
 require "hermes_agent/client/util"
@@ -13,6 +17,17 @@ module HermesAgent
     # `Authorization` header, serializes and parses JSON, and maps non-2xx
     # responses to the {Error} hierarchy. Resource objects build paths and
     # delegate here.
+    #
+    # The connection is **persistent and scoped to the transport instance**: a
+    # single keep-alive `HTTP::Session`, built lazily on first use, is reused
+    # across every request so the TCP/TLS handshake happens once rather than per
+    # call. The `http` gem transparently reopens the connection when it has been
+    # closed by the server, has exceeded its keep-alive lifetime, or a prior
+    # request failed (timeout or socket error), so callers never manage the
+    # connection lifecycle. Because the session is per-instance and holds live
+    # connection state, a transport — like the {Client} that owns it — is **not
+    # thread-safe**; multithreaded callers should use a separate client per
+    # thread.
     #
     # Only the subset needed by the currently implemented resources is present;
     # more verbs (`patch`) and richer error mapping will be added as further
@@ -53,7 +68,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def get(path)
-        response = request { client.get(url_for(path)) }
+        response = map_request_errors { session.get(url_for(path)) }
         handle(response)
       end
 
@@ -70,7 +85,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def post(path, body, headers: nil)
-        response = request { client(extra_headers: headers).post(url_for(path), json: body) }
+        response = map_request_errors { session.post(url_for(path), json: body, headers: headers) }
         Result.new(body: handle(response), headers: normalize_headers(response.headers))
       end
 
@@ -88,7 +103,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def patch(path, body)
-        response = request { client.patch(url_for(path), json: body) }
+        response = map_request_errors { session.patch(url_for(path), json: body) }
         handle(response)
       end
 
@@ -101,7 +116,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def delete(path)
-        response = request { client.delete(url_for(path)) }
+        response = map_request_errors { session.delete(url_for(path)) }
         handle(response)
       end
 
@@ -121,7 +136,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def stream_post(path, body, headers: nil)
-        response = request { client(extra_headers: headers).post(url_for(path), json: body) }
+        response = map_request_errors { session.post(url_for(path), json: body, headers: headers) }
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: response.body.to_s,
                                        headers: response.headers.to_h)
@@ -143,7 +158,7 @@ module HermesAgent
       # @raise [APIError] If the server returns a non-2xx response.
       #
       def stream_get(path)
-        response = request { client.get(url_for(path)) }
+        response = map_request_errors { session.get(url_for(path)) }
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: response.body.to_s,
                                        headers: response.headers.to_h)
@@ -159,9 +174,9 @@ module HermesAgent
       #
       # The body is read lazily, chunk by chunk, *after* {#stream_post} has
       # returned — so a socket or read-timeout failure mid-stream happens
-      # outside {#request}'s rescue and would otherwise surface as the raw
+      # outside `map_request_errors`'s rescue and would otherwise surface as the raw
       # `http`-gem exception. Iterating the returned enumerator re-reads the
-      # body inside {#request}, so the same {TimeoutError}/{ConnectionError}
+      # body inside `map_request_errors`, so the same {TimeoutError}/{ConnectionError}
       # mapping applies. Chunks delivered before the failure are still yielded;
       # the exception is raised when the failing read is reached. Keeps {Stream}
       # HTTP-agnostic — it only ever sees mapped errors.
@@ -171,7 +186,7 @@ module HermesAgent
       #
       def map_stream_errors(body)
         ::Enumerator.new do |yielder|
-          request { body.each { |chunk| yielder << chunk } }
+          map_request_errors { body.each { |chunk| yielder << chunk } }
         end
       end
 
@@ -184,7 +199,7 @@ module HermesAgent
       # @raise [TimeoutError] On an open or read timeout.
       # @raise [ConnectionError] On a socket, DNS, or TLS failure.
       #
-      def request
+      def map_request_errors
         yield
       rescue ::HTTP::TimeoutError => e
         raise TimeoutError, e.message
@@ -193,18 +208,28 @@ module HermesAgent
       end
 
       ##
-      # @param extra_headers [Hash, nil] Per-request headers merged over the
-      #     defaults.
-      # @return [HTTP::Client] A configured `http` client with auth and
-      #     timeouts applied.
+      # The persistent `http` session for this transport, built once and reused
+      # across requests so its keep-alive connection is shared. The session
+      # carries the default headers (auth, `Accept`) and the configured
+      # timeouts, and reuses an idle connection for up to the configured
+      # keep-alive timeout before reopening it; per-request headers are merged
+      # over the defaults at the call site via the request's `headers:` option.
+      # Scoped to (and pinned to the origin of) this transport instance; not
+      # thread-safe.
       #
-      def client(extra_headers: nil)
-        headers = extra_headers ? default_headers.merge(extra_headers) : default_headers
-        result = ::HTTP.headers(headers)
-        if @config.timeout || @config.open_timeout
-          result = result.timeout(read: @config.timeout, connect: @config.open_timeout)
-        end
-        result
+      # @return [HTTP::Session] The persistent, auth- and timeout-configured
+      #     session.
+      #
+      def session
+        @session ||=
+          begin
+            result = ::HTTP.persistent(@config.base_url, timeout: @config.keep_alive_timeout)
+                           .headers(default_headers)
+            if @config.timeout || @config.open_timeout
+              result = result.timeout(read: @config.timeout, connect: @config.open_timeout)
+            end
+            result
+          end
       end
 
       ##
