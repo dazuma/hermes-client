@@ -33,13 +33,18 @@ module HermesAgent
         end
 
         ##
-        # List the scheduled jobs.
+        # List the scheduled jobs. By default the server returns only enabled
+        # jobs; pass `include_disabled: true` to include paused/disabled ones.
+        # (The list is never paginated — the full set is always returned.)
         #
+        # @param include_disabled [Boolean] Whether to include disabled
+        #     (paused) jobs. Defaults to `false` (enabled jobs only).
         # @return [Array<Entities::Job>] The jobs (empty when there are none).
         # @raise [APIError] If the server returns a non-2xx response.
         #
-        def list
-          body = @transport.get("/api/jobs")
+        def list(include_disabled: false)
+          path = include_disabled ? "/api/jobs?include_disabled=true" : "/api/jobs"
+          body = @transport.get(path)
           Array(body["jobs"]).map { |raw| Entities::Job.new(raw) }
         end
 
@@ -65,9 +70,13 @@ module HermesAgent
         # @param skills [Array<String>, nil] Attached skill names. Omitted when
         #     `nil`.
         # @param script [String, nil] A script path under `~/.hermes/scripts/`.
-        #     Omitted when `nil`.
+        #     Omitted when `nil`. **Note:** the reference gateway's create
+        #     handler silently drops this field (it stays `null`); kept as a
+        #     parameter for forward-compatibility and other deployments.
         # @param no_agent [Boolean, nil] Whether to skip the LLM and deliver the
         #     script's stdout verbatim. Omitted when `nil` (so `false` is sent).
+        #     **Note:** like `script`, silently dropped by the reference
+        #     gateway's create handler (stays `false`).
         # @param extra [Hash] Additional request-body fields merged in as-is.
         # @return [Entities::Job] The created job.
         # @raise [BadRequestError] On a missing `name`/`schedule` (`400`).
@@ -116,8 +125,10 @@ module HermesAgent
         # @param deliver [String, nil] A new delivery target. Omitted when `nil`.
         # @param skills [Array<String>, nil] New skill names. Omitted when `nil`.
         # @param script [String, nil] A new script path. Omitted when `nil`.
+        #     **Note:** silently dropped by the reference gateway (see {#create}).
         # @param no_agent [Boolean, nil] A new `no_agent` flag. Omitted when
-        #     `nil`.
+        #     `nil`. **Note:** silently dropped by the reference gateway (see
+        #     {#create}).
         # @param extra [Hash] Additional request-body fields merged in as-is.
         # @return [Entities::Job] The updated job.
         # @raise [NotFoundError] If no such job exists.

@@ -252,6 +252,16 @@ describe ::HermesAgent::Client::Resources::Jobs do
       assert_equal("/api/jobs", list_transport.requested_path)
     end
 
+    it "omits the include_disabled query by default" do
+      jobs(list_transport).list(include_disabled: false)
+      assert_equal("/api/jobs", list_transport.requested_path)
+    end
+
+    it "adds the include_disabled query when requested" do
+      jobs(list_transport).list(include_disabled: true)
+      assert_equal("/api/jobs?include_disabled=true", list_transport.requested_path)
+    end
+
     it "returns an array of Job entities unwrapped from the jobs envelope" do
       result = jobs(list_transport).list
       assert_instance_of(::Array, result)
