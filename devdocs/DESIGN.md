@@ -313,7 +313,10 @@ Captured by probing the `hermes-test` profile (`toys gateway chat/respond
     `{input,output,total}_tokens`) on success, or `run.cancelled` (carries
     *only* `event`/`run_id`/`timestamp` — no `output`/`usage`) after a `stop`;
     when a run is stopped before doing any work, that single frame is the entire
-    replay. (`run.failed` is presumed but was not reproduced.)
+    replay. **`run.failed` (reproduced 2026-05-24)** carries `event`/`run_id`/
+    `timestamp` plus an **`error` string** (and no `output`/`usage`) — e.g.
+    `error: "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. ..."`. Like
+    `cancelled`, a failed run replays only this single terminal frame.
   - **Approval frames** for a gated tool: `approval.request` (`command`,
     `pattern_key`, `pattern_keys[]`, `description`, `choices[]`) when the run
     parks at `waiting_for_approval`, then `approval.responded` (`choice`,
@@ -524,15 +527,36 @@ is tracked by polling `get` or subscribing to `stream_events`. `run_id` is
 - `Run` (returned by both `create` and `get`; `#id` aliases `#run_id`):
   `object: "hermes.run"`, `run_id`, `status`, `created_at`/`updated_at` (epoch
   floats), `session_id`, `model`, `last_event`, `output`, `usage`
-  (`{input,output,total}_tokens`). **`output` and `usage` are nullable** —
-  present on a `completed` run but **absent when `cancelled`** (and before
-  terminal) — so readers must tolerate `nil`. `create`'s minimal Run carries
-  only `run_id` + `status`.
+  (`{input,output,total}_tokens`), and — **only on a `failed` run** — an
+  `error` string. **`output` and `usage` are nullable** — present on a
+  `completed` run but **absent when `cancelled` or `failed`** (and before
+  terminal) — so readers must tolerate `nil`. A **`failed`** run looks like a
+  `cancelled` one (no `output`/`usage`) **plus** `error: "<string>"` and
+  `last_event: "run.failed"` (reproduced 2026-05-24; the `error` is the
+  upstream message, e.g. a Gemini 400). `create`'s minimal Run carries only
+  `run_id` + `status`. **`model` is echoed from the request** (`create` accepts
+  a `model:` field and stores it on the Run) **but ignored** — the run always
+  uses the gateway-configured model (verified: a bogus `model:` was echoed back
+  yet the run completed normally on the real model).
 - Status lifecycle: `started` → `running` → terminal `completed` | `cancelled`
-  | `failed` (`failed` not yet reproduced); a gated tool parks the run at
+  | `failed`; a gated tool parks the run at
   **`waiting_for_approval`**, and `stop` adds a transient `stopping`. Run
   records — and especially the event buffer — are retained only **briefly**
   after terminal, then evicted (`get`/`stop`/`approval` → `404 run_not_found`).
+- **What makes a run `failed` (source-derived, `gateway/platforms/api_server.py`):**
+  `failed` is a **model/provider/runtime-level** failure, not a tool failure.
+  The server-side run task sets `failed` via two paths that emit the **identical**
+  wire shape: (a) a *structured* failure — `run_conversation` returns
+  `{failed: True, error}` for a **non-retryable provider error** (e.g. a 4xx
+  with no credential-pool/fallback to recover with), and (b) an **unhandled
+  exception** (`error=str(exc)`). Things that do **not** cause `failed`: a tool
+  erroring or even `kill -9 $$` (the agent narrates and the run still
+  `completed`); a denied approval (also `completed`); and the agent inactivity
+  timeout (`agent.gateway_timeout`, default 1800s) — that path lives in the
+  *messaging* dispatcher, **not** the `/v1/runs` handler, which calls
+  `run_conversation` directly with no `wait_for`. Practical repro for tests:
+  point the provider at a bad key/endpoint (a bad `GOOGLE_API_KEY` yields the
+  Gemini-400 `error` above), which fails fast at near-zero token cost.
 - `stop` returns `200 { run_id, status: "stopping" }` (cooperative; the run then
   resolves to `cancelled`). It need not model as a `Run` — a small ack suffices.
 - `stream_events` uses the same block-or-enumerator pattern, but over **plain
@@ -770,11 +794,14 @@ running server; several below have been refined that way already.
   (create body, poll/status, stop, and the full approval workflow), and the
   **Jobs API** (entity shape, schedule union, create/update/delete/pause/resume/
   trigger, lifecycle, and the mixed error envelope) are now mapped (see above and
-  `hermes-api-server.md`). Runs leftovers: whether `create` accepts a `model:`
-  field, and the `failed`-status / `run.failed` shape (not reproduced — needs a
-  model/infra failure). Jobs leftovers (non-blocking, follow conventions): the
-  populated shapes of `origin` / `enabled_toolsets` (always `null` in samples)
-  and the failing-run `last_status`/`last_error` shape.
+  `hermes-api-server.md`). ~~Runs leftovers: whether `create` accepts a `model:`
+  field, and the `failed`-status / `run.failed` shape.~~ **Both resolved
+  2026-05-24:** `create` accepts `model:` but ignores it (echoed on the Run,
+  real configured model used); the `failed` status / `run.failed` shape is
+  documented above (forced via a deliberately-invalid provider key — see the
+  source-derived note below). Jobs leftovers (non-blocking, follow conventions):
+  the populated shapes of `origin` / `enabled_toolsets` (always `null` in
+  samples) and the failing-run `last_status`/`last_error` shape.
 - The full set of SSE event types and payloads. Chat-completion chunks
   (including the custom `hermes.tool.progress` frames), the full Responses API
   event sequence (including the terminal `response.completed`), and the **run
