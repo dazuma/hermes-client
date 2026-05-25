@@ -382,4 +382,105 @@ describe "jobs" do
     client = ::HermesAgent::Client.new(base_url: "http://127.0.0.1:8642")
     assert_instance_of(::HermesAgent::Client::Resources::Jobs, client.jobs)
   end
+
+  integration_port = ENV["HERMES_CLIENT_INTEGRATION_PORT"]
+
+  if integration_port
+    let(:client) do
+      ::HermesAgent::Client.new(base_url: "http://localhost:#{integration_port}",
+                                api_key: ::HermesAgent::Tests.integration_api_key)
+    end
+
+    # Walk a job through its whole CRUD lifecycle without it ever firing: the
+    # schedule is comfortably far out ("every 12h"), so the scheduler never
+    # executes it (no LLM call, no cost), and the job is deleted in an ensure so
+    # nothing is left behind on the gateway.
+    it "creates, reads, updates, pauses, resumes, lists, and deletes a job" do
+      created = client.jobs.create(name: "hermes-client probe", schedule: "every 12h",
+                                   prompt: "Say hello.", repeat: 1)
+      begin
+        assert_instance_of(::HermesAgent::Client::Entities::Job, created)
+        refute_nil(created.id)
+        assert_equal("hermes-client probe", created.name)
+        assert_equal(true, created.enabled?)
+        assert_equal("scheduled", created.state)
+        assert(created.schedule.interval?)
+        assert_equal(720, created.schedule.minutes)
+        assert_equal(0, created.repeat.completed)
+        # The override slots are read-only via this API: ignored on create.
+        assert_nil(created.model)
+
+        fetched = client.jobs.get(created.id)
+        assert_equal(created.id, fetched.id)
+        assert_equal("hermes-client probe", fetched.name)
+
+        assert_includes(client.jobs.list.map(&:id), created.id)
+
+        # PATCH re-parses the schedule (interval -> cron) and recomputes the run.
+        updated = client.jobs.update(created.id, name: "renamed probe", schedule: "0 9 * * *")
+        assert_equal("renamed probe", updated.name)
+        assert(updated.schedule.cron?)
+        assert_equal("0 9 * * *", updated.schedule.expr)
+
+        paused = client.jobs.pause(created.id)
+        assert_equal("paused", paused.state)
+        assert_equal(false, paused.enabled?)
+        refute_nil(paused.paused_at)
+
+        resumed = client.jobs.resume(created.id)
+        assert_equal("scheduled", resumed.state)
+        assert_equal(true, resumed.enabled?)
+        assert_nil(resumed.paused_at)
+      ensure
+        client.jobs.delete(created.id)
+      end
+
+      # Once deleted, the job is gone.
+      assert_raises(::HermesAgent::Client::NotFoundError) { client.jobs.get(created.id) }
+    end
+
+    # Confirms the /run (trigger) path against the live server. Trigger is
+    # asynchronous — it advances next_run_at to "now" for the scheduler's next
+    # tick and returns immediately. We delete right after, which cancels any
+    # in-flight run, so the trivial "Say hello." prompt is very unlikely to
+    # actually execute (the scheduler tick lags ~20s); worst-case cost is one
+    # tiny run.
+    it "triggers a job out of schedule against the live gateway" do
+      created = client.jobs.create(name: "hermes-client trigger probe", schedule: "every 12h",
+                                   prompt: "Say hello.", repeat: 1)
+      begin
+        triggered = client.jobs.trigger(created.id)
+        assert_instance_of(::HermesAgent::Client::Entities::Job, triggered)
+        assert_equal(created.id, triggered.id)
+      ensure
+        client.jobs.delete(created.id)
+      end
+    end
+
+    it "raises NotFoundError for a well-formed but unknown job id" do
+      assert_raises(::HermesAgent::Client::NotFoundError) do
+        client.jobs.get("f" * 12)
+      end
+    end
+
+    it "raises BadRequestError for a malformed job id" do
+      assert_raises(::HermesAgent::Client::BadRequestError) do
+        client.jobs.get("nonexistent123")
+      end
+    end
+
+    it "raises BadRequestError when name is missing" do
+      assert_raises(::HermesAgent::Client::BadRequestError) do
+        client.jobs.create(name: "", schedule: "every 12h")
+      end
+    end
+
+    # A bad schedule is rejected as a 500 (ServerError), not a 400, even though
+    # it is really invalid user input — see the resource's create YARD.
+    it "raises ServerError for an unparseable schedule" do
+      assert_raises(::HermesAgent::Client::ServerError) do
+        client.jobs.create(name: "hermes-client bad-schedule", schedule: "not a real schedule")
+      end
+    end
+  end
 end
