@@ -68,6 +68,24 @@ describe ::HermesAgent::Client::APIError do
       assert_equal("invalid_request_error", error.error["type"])
     end
 
+    it "extracts the message from a flat string error body (jobs business errors)" do
+      error = api_error.from_response(status: 404, body: '{"error":"Job not found"}')
+      assert_instance_of(errors::NotFoundError, error)
+      assert_equal("Job not found", error.message)
+    end
+
+    it "exposes nil #error for a flat string error body" do
+      error = api_error.from_response(status: 404, body: '{"error":"Job not found"}')
+      assert_nil(error.error)
+    end
+
+    it "extracts the message from a flat string error on a jobs schedule 500" do
+      body = '{"error":"Invalid schedule \'nope\'. Use:\n  - Duration: \'30m\'"}'
+      error = api_error.from_response(status: 500, body: body)
+      assert_instance_of(errors::ServerError, error)
+      assert_match(/Invalid schedule/, error.message)
+    end
+
     it "tolerates a non-JSON router-level error body" do
       error = api_error.from_response(status: 404, body: "404: Not Found")
       assert_instance_of(errors::NotFoundError, error)

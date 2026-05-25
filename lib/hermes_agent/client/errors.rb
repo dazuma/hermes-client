@@ -61,13 +61,17 @@ module HermesAgent
     #
     # ## Error payloads
     #
-    # The server uses two distinct error formats, both of which {from_response}
-    # accommodates. Application-level errors (authentication, body validation,
-    # missing resources) return an OpenAI-style JSON body of the form
-    # `{"error": {"message", "type", "param"?, "code"?}}`, and {#error} exposes
-    # that inner hash. Router-level errors (an unrouted path, a wrong method)
-    # instead return a bare text body such as `"404: Not Found"`; for those
-    # {#error} is `nil` and only {#body} is meaningful.
+    # The server uses three distinct error formats, all of which
+    # {from_response} accommodates. Application-level errors (authentication,
+    # body validation, missing resources on the `/v1` surface) return an
+    # OpenAI-style JSON body of the form `{"error": {"message", "type",
+    # "param"?, "code"?}}`, and {#error} exposes that inner hash. The jobs
+    # surface (`/api/jobs`) instead returns a **flat** `{"error": "<message>"}`
+    # for its business errors (`400`/`404`/`500`); the message is still surfaced
+    # on {#message}, but {#error} is `nil` (there is no inner hash). Router-level
+    # errors (an unrouted path, a wrong method) return a bare text body such as
+    # `"404: Not Found"`; for those too {#error} is `nil` and only {#body} is
+    # meaningful.
     #
     # Even within the JSON family the field set is inconsistent — `message` and
     # `type` are always present, but `param` and `code` may be null or absent —
@@ -87,7 +91,8 @@ module HermesAgent
       #
       def self.from_response(status:, body:, headers: {})
         error = parse_error_payload(body)
-        message = (error && error["message"]) || "Unexpected HTTP status #{status}"
+        message = (error && error["message"]) || parse_flat_message(body) ||
+                  "Unexpected HTTP status #{status}"
         class_for_status(status).new(message, status: status, body: body,
                                               headers: headers, error: error)
       end
@@ -116,6 +121,19 @@ module HermesAgent
         nil
       end
       private_class_method :parse_error_payload
+
+      # Pull a flat string `error` message out of a response body, the shape the
+      # jobs business errors (400/404/500) use instead of the nested `/v1`
+      # envelope. Returns nil for any other shape (including the nested hash,
+      # which {parse_error_payload} handles) or a non-JSON body.
+      def self.parse_flat_message(body)
+        parsed = ::JSON.parse(body.to_s)
+        inner = parsed["error"] if parsed.is_a?(::Hash)
+        inner if inner.is_a?(::String)
+      rescue ::JSON::ParserError
+        nil
+      end
+      private_class_method :parse_flat_message
 
       ##
       # Create an API error. Prefer {from_response}, which selects the correct
