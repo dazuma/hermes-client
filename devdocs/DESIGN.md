@@ -653,6 +653,16 @@ writeup):**
   **flat** `{error: "<string>"}`. `APIError` parsing must accept both. (Bad
   `schedule` is a `500`; bad `deliver` is **not** validated on write.)
 - `pause`/`resume` are idempotent (no error when already in the target state).
+- **Run outcome fields** (set by the scheduler after each fire, verified live):
+  a **success** sets `last_run_at` (ISO-8601), `last_status: "ok"`, leaves
+  `last_error`/`last_delivery_error` null, and bumps `repeat.completed`. A
+  **failed** agent run sets `last_status: "error"` and `last_error` to the
+  **exception-prefixed** message (e.g. `"RuntimeError: Gemini HTTP 400
+  (INVALID_ARGUMENT): API key not valid. ..."` — note the `RuntimeError:`
+  prefix, unlike the run's bare `error`); `last_delivery_error` stays null (the
+  agent failed before delivery, which is tracked separately), `repeat.completed`
+  still bumps, and a recurring job stays `state: "scheduled"` (it is not
+  disabled by a failed run). `last_status` is thus `"ok"` | `"error"` | `nil`.
 
 **`Job` entity modeling** (follow [[entity-conventions]] — a reader for every
 field in the entity table in `hermes-api-server.md`; here are the resource-
@@ -799,9 +809,16 @@ running server; several below have been refined that way already.
   2026-05-24:** `create` accepts `model:` but ignores it (echoed on the Run,
   real configured model used); the `failed` status / `run.failed` shape is
   documented above (forced via a deliberately-invalid provider key — see the
-  source-derived note below). Jobs leftovers (non-blocking, follow conventions):
-  the populated shapes of `origin` / `enabled_toolsets` (always `null` in
-  samples) and the failing-run `last_status`/`last_error` shape.
+  source-derived note below). ~~Jobs leftover: the failing-run
+  `last_status`/`last_error` shape.~~ **Resolved 2026-05-24** (same invalid-key
+  trick on a recurring cron job): a failed run sets `last_status: "error"` and
+  `last_error` to the **exception-prefixed** message (e.g. `"RuntimeError:
+  Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. ..."` — note the
+  `RuntimeError:` prefix, unlike the run's bare `error`), leaves
+  `last_delivery_error` null (the agent failed before delivery), bumps
+  `repeat.completed`, and a recurring job **stays `state: "scheduled"`**.
+  Remaining jobs leftover (non-blocking, follow conventions): the populated
+  shapes of `origin` / `enabled_toolsets` (always `null` in samples).
 - The full set of SSE event types and payloads. Chat-completion chunks
   (including the custom `hermes.tool.progress` frames), the full Responses API
   event sequence (including the terminal `response.completed`), and the **run
