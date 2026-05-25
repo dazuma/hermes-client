@@ -12,6 +12,7 @@ require "hermes_agent/client/transport"
 require "hermes_agent/client/resources/capabilities"
 require "hermes_agent/client/resources/chat"
 require "hermes_agent/client/resources/health"
+require "hermes_agent/client/resources/jobs"
 require "hermes_agent/client/resources/models"
 require "hermes_agent/client/resources/responses"
 require "hermes_agent/client/resources/runs"
@@ -82,6 +83,14 @@ module HermesAgent
     #
     def health
       @health ||= Resources::Health.new(@transport)
+    end
+
+    ##
+    # The jobs resource (the Jobs API, for scheduled background work).
+    # @return [Resources::Jobs]
+    #
+    def jobs
+      @jobs ||= Resources::Jobs.new(@transport)
     end
 
     ##

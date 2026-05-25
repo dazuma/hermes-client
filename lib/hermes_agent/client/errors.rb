@@ -68,7 +68,8 @@ module HermesAgent
     # "param"?, "code"?}}`, and {#error} exposes that inner hash. The jobs
     # surface (`/api/jobs`) instead returns a **flat** `{"error": "<message>"}`
     # for its business errors (`400`/`404`/`500`); the message is still surfaced
-    # on {#message}, but {#error} is `nil` (there is no inner hash). Router-level
+    # on the exception message, but {#error} is `nil` (there is no inner hash).
+    # Router-level
     # errors (an unrouted path, a wrong method) return a bare text body such as
     # `"404: Not Found"`; for those too {#error} is `nil` and only {#body} is
     # meaningful.
