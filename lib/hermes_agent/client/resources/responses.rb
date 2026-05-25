@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "hermes_agent/client/entities/response"
+require "hermes_agent/client/conversation"
 require "hermes_agent/client/util"
 
 module HermesAgent
@@ -78,18 +79,70 @@ module HermesAgent
         #     block is given, otherwise the {Stream}.
         # @raise [APIError] If the server returns a non-2xx response.
         #
-        def stream_create(input:, previous_response_id: nil, conversation: nil, **extra, &block)
+        def stream_create(input:, previous_response_id: nil, conversation: nil, **extra, &)
+          stream_response(on_result: nil, input: input, previous_response_id: previous_response_id,
+                          conversation: conversation, **extra, &)
+        end
+
+        ##
+        # Create a streamed response, with an optional hook invoked with the
+        # assembled {Entities::Response} once the stream is consumed. This is
+        # the shared implementation behind {#stream_create}; the `on_result`
+        # hook is folded into the stream's aggregator (so it fires exactly when
+        # the final response is built, for both the block and enumerator forms)
+        # rather than exposed as a settable hook on the returned {Stream}, where
+        # a caller could clobber it. It exists for {Conversation} to capture the
+        # new response id for chaining; it is not part of the public API.
+        #
+        # @!visibility private
+        # @param on_result [#call, nil] Called with the assembled
+        #     {Entities::Response} when the stream's result is built. May be nil.
+        # @param input [String, Array<Hash>] The input (see {#create}).
+        # @param previous_response_id [String, nil] The prior response id to
+        #     chain onto. Omitted from the request when nil.
+        # @param conversation [String, nil] A conversation name to chain onto.
+        #     Omitted from the request when nil.
+        # @param extra [Hash] Additional request-body fields.
+        # @yieldparam event [Entities::ResponseStreamEvent] Each streamed event.
+        # @return [Entities::Response, Stream] The assembled response when a
+        #     block is given, otherwise the {Stream}.
+        #
+        def stream_response(on_result:, input:, previous_response_id: nil, conversation: nil, **extra, &block)
           body = build_body(input, previous_response_id, conversation, extra)
           body[:stream] = true
           result = @transport.stream_post("/v1/responses", body)
           session = Util.session_headers(result.headers)
           stream = Stream.new(result.body, event_class: Entities::ResponseStreamEvent) do |events|
-            Entities::Response.from_events(events, **session)
+            response = Entities::Response.from_events(events, **session)
+            on_result&.call(response)
+            response
           end
           return stream unless block
 
           stream.each(&block)
           stream.result
+        end
+
+        ##
+        # Begin a multi-turn conversation that automatically chains its turns.
+        #
+        # Returns a {Conversation} — a stateful helper wrapping this resource —
+        # whose `create` / `stream_create` take only the per-turn `input:` (plus
+        # `extra`) and handle chaining for you. With no arguments it tracks the
+        # `previous_response_id` of each turn client-side and threads it into the
+        # next; pass `name:` instead to chain via a server-side named
+        # conversation; pass `previous_response_id:` to resume a client-side
+        # thread from a known id. `name:` and `previous_response_id:` are
+        # mutually exclusive (they select different chaining mechanisms).
+        #
+        # @param name [String, nil] A stable conversation name for server-side
+        #     chaining. Mutually exclusive with `previous_response_id`.
+        # @param previous_response_id [String, nil] A prior response id to seed
+        #     client-side chaining from. Mutually exclusive with `name`.
+        # @return [Conversation]
+        #
+        def conversation(name: nil, previous_response_id: nil)
+          Conversation.new(self, name: name, previous_response_id: previous_response_id)
         end
 
         ##
