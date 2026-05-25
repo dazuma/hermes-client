@@ -10,13 +10,18 @@ resource: the `health`, `capabilities`, `models`, `chat` (incl. streaming),
 implemented** — the full planned resource surface is in place (verified against
 the live `hermes-test` gateway, including jobs CRUD/pause/resume/trigger). The
 tooling, packaging, and CI are fully set up. Remaining work is refinement
-(see the open-questions section of `devdocs/DESIGN.md`), not new resources.
+(see the "Known limitations & deferred work" section of `devdocs/DESIGN.md`),
+not new resources.
 
 **Read [`devdocs/DESIGN.md`](devdocs/DESIGN.md) first.** It specifies the
 conventions, namespacing, resource API, return-value/streaming/error models,
-and internal layering the implementation should follow, plus the open questions
-still to resolve. It is the source of truth for design decisions; keep it
-updated as the design evolves. (`devdocs/` is excluded from the packaged gem.)
+and internal layering the implementation should follow. It is the source of
+truth for client **design** decisions; keep it updated as the design evolves.
+Its companion [`devdocs/hermes-api-server.md`](devdocs/hermes-api-server.md) is
+the **server wire reference** (endpoints, request/response shapes, error
+envelopes, SSE framing, observed behavior). Keep the scope split: server wire
+facts live in the wire reference and are cross-referenced from `DESIGN.md`, not
+duplicated. (`devdocs/` is excluded from the packaged gem.)
 
 ## Commands
 
@@ -55,13 +60,14 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 ## Exploring real server behavior (`toys gateway`)
 
 The published API docs are thin on request/response field details and SSE event
-shapes, so `devdocs/DESIGN.md`'s field lists are best-effort. The `toys gateway`
+shapes, so `devdocs/hermes-api-server.md`'s field lists are best-effort. The `toys gateway`
 tools exist to resolve those gaps empirically: they spin up a local gateway and
 hit its endpoints with **raw HTTP**, printing prettified JSON (and raw SSE
 frames). They deliberately **bypass the client library** so you see the server's
 unvarnished wire format — not whatever the entity wrappers would surface. Use
 them to answer "what does the server actually return?", then fold durable
-findings into `devdocs/DESIGN.md` (marked as observed/best-effort).
+findings into `devdocs/hermes-api-server.md` (the wire reference), following its
+provenance convention.
 
 **Prerequisite:** the `hermes` CLI must be installed and a `hermes-test` profile
 must exist (`hermes profile list` to check) — the same profile the integration
