@@ -85,8 +85,11 @@ process), so you can `start` once and probe repeatedly — important for the
 
 **Probing:**
 
-- `toys gateway probe <METHOD> <PATH> [--body=JSON] [--stream] [--token=TOKEN]` —
-  the generic escape hatch. Bearer token defaults to the recorded key.
+- `toys gateway probe <METHOD> <PATH> [--body=JSON] [--stream] [--token=TOKEN]
+  [--idempotency-key=KEY] [--show-headers]` — the generic escape hatch. Bearer
+  token defaults to the recorded key. `--idempotency-key` sends an
+  `Idempotency-Key` header (server dedupes ~5 min); `--show-headers` dumps all
+  response headers and the request latency to stderr.
 - Shortcuts: `toys gateway models`, `capabilities`, `health [--detailed]`,
   `chat "<text>" [--stream]`,
   `respond "<text>" [--previous=ID] [--conversation=NAME] [--stream]`.

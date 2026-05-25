@@ -571,7 +571,36 @@ toys gateway probe POST /api/jobs \
 ## Headers / request behavior
 
 - `Idempotency-Key` request header is supported for deduplication (~5-minute
-  cache). Useful for safely retrying mutating calls.
+  cache). Useful for safely retrying mutating calls. **Scope verified from
+  source + live probing (2026-05-25):**
+  - Honored on **exactly two** operations: **non-streaming**
+    `POST /v1/chat/completions` and **non-streaming** `POST /v1/responses`.
+    The **streaming** variants of both, **all** of `/v1/runs*`, and **every**
+    `/api/jobs` mutation **ignore** the header (the streaming branch returns
+    before the check; the runs/jobs handlers never read it). Probed: two
+    `/v1/runs` with the same key returned **different** `run_id`s.
+  - Server impl is an in-memory `_IdempotencyCache`: TTL **300 s**, max **1000**
+    entries, LRU eviction. Cache key = the header value **alone**; it also
+    stores a sha256 **fingerprint** of a subset of body fields (chat:
+    `model, messages, tools, tool_choice, stream`; responses: `input,
+    instructions, previous_response_id, conversation, model, tools`).
+  - **Hit** (same key + matching fingerprint): the cached agent result is
+    returned **without re-running the model** (probed: ~2–3 ms vs ~1.3–2.2 s).
+  - **Same key, different fingerprint**: it **silently recomputes** (no 409/422
+    like Stripe) **and overwrites** the stored entry — last-write-wins, **one
+    entry per key**. Probed: reusing a key with a changed body re-ran the model
+    and a later request for the original body re-ran *again* (the original entry
+    was clobbered).
+  - Concurrent in-flight requests with the same (key, fingerprint) **coalesce**
+    onto one computation (`asyncio` task + `shield`).
+  - **No replay signal of any kind.** A replayed response has the **same HTTP
+    status** (200), **no** `Idempotency-*`/replay header, and **no** body
+    marker. The cache memoizes only the agent `(result, usage)`, **not** the
+    HTTP envelope: the `id` (`chatcmpl-…`/`resp_…`) is **regenerated every
+    call** and `created`/`created_at` is a per-call `int(time.time())` (so they
+    differ on a replay — but they also differ on any recompute, i.e. they are
+    *fresh values*, not a dedup indicator). A caller therefore **cannot detect**
+    from the response whether a given call was served from the cache.
 - Security response headers: `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`.
 - CORS is disabled by default; origins must be explicitly allowlisted. Preflight

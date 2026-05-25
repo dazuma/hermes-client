@@ -353,8 +353,16 @@ Notes:
 - The bearer token is sent as `Authorization: Bearer <api_key>` on every
   request. Default client-side env var is **`HERMES_API_KEY`** (distinct from
   the server's own `API_SERVER_KEY`).
-- Mutating requests accept an optional `idempotency_key:` sent as the
-  `Idempotency-Key` header (server dedupes within ~5 minutes).
+- An optional `idempotency_key:` is sent as the `Idempotency-Key` header. The
+  server honors it on **only** the **non-streaming** `chat.create` and
+  `responses.create` paths (verified 2026-05-25 — see `hermes-api-server.md`);
+  it is **ignored** on the streaming variants, all of `runs`, and all `jobs`
+  mutations, so the client **does not** accept the kwarg there (offering it
+  would imply a dedup that does not happen). Dedup window is ~5 minutes
+  (TTL 300 s). **No replay is observable to the caller** — a cached hit returns
+  the same status/body content with a *freshly regenerated* `id`/`created`, and
+  no replay header — so the client cannot (and does not) surface a
+  "was-deduplicated" signal; there is nothing to surface.
 - The server advertises **session-continuity headers** in `/v1/capabilities`:
   `X-Hermes-Session-ID` (`session_continuity_header`) and `X-Hermes-Session-Key`
   (`session_key_header`). Observed behavior (probed against `hermes-test`):
@@ -379,10 +387,12 @@ present on every request method.
 ### `client.chat` — Chat Completions (`POST /v1/chat/completions`, stateless)
 
 ```ruby
-client.chat.create(messages:, session_id:, session_key:)        # => ChatCompletion
+client.chat.create(messages:, session_id:, session_key:,
+                   idempotency_key:)                            # => ChatCompletion
 client.chat.stream_create(messages:, session_id:, session_key:, &block)
                                               # streams ChatCompletionChunk /
                                               #   ToolProgress events
+                                              #   (no idempotency_key: ignored on streams)
 ```
 
 - `messages` is the OpenAI-style array; content may include `image_url` parts
@@ -391,6 +401,11 @@ client.chat.stream_create(messages:, session_id:, session_key:, &block)
   `X-Hermes-Session-ID` / `X-Hermes-Session-Key` request headers. The returned
   `ChatCompletion` exposes the server's `#session_id` / `#session_key` (read
   from the response headers) regardless of whether they were sent.
+- `idempotency_key:` (optional, `create` only) is sent as the `Idempotency-Key`
+  header for safe retries; the server replays the cached result within ~5 min.
+  The replay is **transparent** (no client-visible signal — see the headers note
+  above), so nothing is surfaced on the return value. Not offered on
+  `stream_create` (the server ignores it there).
 - OpenAI-compatible on the wire; additional sampling params flow through.
 - No `model` field is sent (server configures the model; it ignores a
   client-supplied one). Callers can still pass one via `**extra`.
@@ -413,10 +428,12 @@ client.chat.stream_create(messages:, session_id:, session_key:, &block)
 ```ruby
 client.responses.create(input:,
                         previous_response_id: nil,  # chain a prior turn
-                        conversation: nil)           # named conversation
+                        conversation: nil,           # named conversation
+                        idempotency_key: nil)        # dedup retries (~5 min)
                                                      #   => Response
 client.responses.stream_create(input:, previous_response_id: nil,
                               conversation: nil, &block)  # streams Response events
+                                                          #   (no idempotency_key: ignored on streams)
 client.responses.get(id)      # GET    /v1/responses/{id}  => Response
 client.responses.delete(id)   # DELETE /v1/responses/{id}  => deletion result
 
@@ -453,6 +470,11 @@ client.responses.conversation(previous_response_id: id) # resume an id-tracked t
   headers. The returned `Response` from `create` / `stream_create` still exposes
   the server-generated `#session_id` (read from the response header);
   `responses.get` returns no session header, so its `#session_id` is `nil`.
+- `idempotency_key:` (optional, `create` only) is sent as the `Idempotency-Key`
+  header for safe retries; the server replays the cached result within ~5 min.
+  The replay is **transparent** (no client-visible signal — see the headers note
+  above), so nothing is surfaced on the return value. Not offered on
+  `stream_create` (the server ignores it there).
 - Inline images supplied as `input_image` input parts.
 - Storage is capped server-side (~100 responses, LRU eviction) — callers should
   not assume older responses remain retrievable.

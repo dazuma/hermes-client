@@ -96,7 +96,8 @@ module HermesGateway
 
   # Makes a single raw HTTP request to the gateway and renders the response.
   def probe(base_url:, method:, path:, token: nil, body: nil, stream: false,
-            session_id: nil, session_key: nil)
+            session_id: nil, session_key: nil, idempotency_key: nil,
+            show_headers: false)
     url = "#{base_url.chomp('/')}#{path}"
     client = ::HTTP
     client = client.auth("Bearer #{token}") if token && !token.empty?
@@ -104,18 +105,40 @@ module HermesGateway
     headers["Content-Type"] = "application/json" if body
     headers["X-Hermes-Session-ID"] = session_id if session_id
     headers["X-Hermes-Session-Key"] = session_key if session_key
+    headers["Idempotency-Key"] = idempotency_key if idempotency_key
     client = client.headers(headers)
     opts = body ? {body: body} : {}
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
     response = client.request(method.to_s.downcase.to_sym, url, **opts)
-    stream ? render_stream(response) : render_response(response)
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+    if stream
+      render_stream(response, show_headers: show_headers)
+    else
+      render_response(response, show_headers: show_headers, elapsed: elapsed)
+    end
   end
 
   # Prints the HTTP status line (to stderr) and the prettified body (to stdout),
-  # so that redirecting stdout captures clean JSON.
-  def render_response(response)
+  # so that redirecting stdout captures clean JSON. With show_headers, dumps
+  # every response header (and, when given, the request's elapsed wall time) to
+  # stderr instead of only the session-continuity headers — handy for probing
+  # whether a response carries any replay/dedup signal.
+  def render_response(response, show_headers: false, elapsed: nil)
     $stderr.puts("HTTP #{response.status}")
-    render_session_headers(response)
+    $stderr.puts(format("elapsed: %d ms", (elapsed * 1000).round)) if elapsed
+    if show_headers
+      render_all_headers(response)
+    else
+      render_session_headers(response)
+    end
     puts(pretty_json(response.body.to_s))
+  end
+
+  # Prints every response header (to stderr, so stdout stays clean JSON).
+  def render_all_headers(response)
+    response.headers.to_h.each do |name, value|
+      $stderr.puts("#{name}: #{Array(value).join(', ')}")
+    end
   end
 
   # Session response headers worth surfacing while studying conversation
@@ -133,9 +156,9 @@ module HermesGateway
 
   # Reads an SSE response frame-by-frame, printing each event name and its
   # prettified data payload as the frames arrive.
-  def render_stream(response)
+  def render_stream(response, show_headers: false)
     $stderr.puts("HTTP #{response.status} (streaming SSE)")
-    render_session_headers(response)
+    show_headers ? render_all_headers(response) : render_session_headers(response)
     $stdout.sync = true
     body = response.body
     buffer = +""

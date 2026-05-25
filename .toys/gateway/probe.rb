@@ -41,8 +41,15 @@ end
 flag :session_key, "--session-key=KEY" do
   desc "Send an X-Hermes-Session-Key request header"
 end
+flag :idempotency_key, "--idempotency-key=KEY" do
+  desc "Send an Idempotency-Key request header (server dedupes within ~5 min)"
+end
+flag :show_headers, "--show-headers" do
+  desc "Dump all response headers (and request latency) to stderr"
+end
 
 def run
   gateway_probe(verb, path, body: body, stream: stream, token: token,
-                session_id: session_id, session_key: session_key)
+                session_id: session_id, session_key: session_key,
+                idempotency_key: idempotency_key, show_headers: show_headers)
 end

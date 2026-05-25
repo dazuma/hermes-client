@@ -34,7 +34,8 @@ mixin "gateway_helpers" do
   # Probes the running gateway, drawing the base URL and bearer token from its
   # recorded state.
   def gateway_probe(method, path, body: nil, stream: false, token: nil,
-                    session_id: nil, session_key: nil)
+                    session_id: nil, session_key: nil, idempotency_key: nil,
+                    show_headers: false)
     state = running_state
     HermesGateway.probe(
       base_url: state["base_url"],
@@ -44,7 +45,9 @@ mixin "gateway_helpers" do
       body: body,
       stream: stream,
       session_id: session_id,
-      session_key: session_key
+      session_key: session_key,
+      idempotency_key: idempotency_key,
+      show_headers: show_headers
     )
   end
 end
