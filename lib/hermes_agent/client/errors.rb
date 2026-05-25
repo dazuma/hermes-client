@@ -168,8 +168,10 @@ module HermesAgent
       attr_reader :body
 
       ##
-      # The response headers.
-      # @return [Hash]
+      # The response headers, keyed by downcased name (the same normalized
+      # shape the success path exposes, so e.g. `headers["retry-after"]` works
+      # regardless of the casing the server sent).
+      # @return [Hash{String=>String}]
       #
       attr_reader :headers
 

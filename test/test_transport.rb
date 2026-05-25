@@ -249,6 +249,33 @@ describe ::HermesAgent::Client::Transport do
     assert_equal("invalid_api_key", error.error["code"])
   end
 
+  it "normalizes error-response headers to downcased keys (matching the success path)" do
+    stub_request(:get, "https://example.test/health")
+      .to_return(status: 429, body: "{}", headers: {"Retry-After" => "30"})
+    error = assert_raises(::HermesAgent::Client::RateLimitError) do
+      transport(base_url: "https://example.test").get("/health")
+    end
+    assert_equal("30", error.headers["retry-after"])
+  end
+
+  it "normalizes error-response headers raised from stream_post" do
+    stub_request(:post, "https://example.test/v1/chat/completions")
+      .to_return(status: 429, body: "{}", headers: {"Retry-After" => "30"})
+    error = assert_raises(::HermesAgent::Client::RateLimitError) do
+      transport(base_url: "https://example.test").stream_post("/v1/chat/completions", {messages: []})
+    end
+    assert_equal("30", error.headers["retry-after"])
+  end
+
+  it "normalizes error-response headers raised from stream_get" do
+    stub_request(:get, "https://example.test/v1/runs/run_1/events")
+      .to_return(status: 429, body: "{}", headers: {"Retry-After" => "30"})
+    error = assert_raises(::HermesAgent::Client::RateLimitError) do
+      transport(base_url: "https://example.test").stream_get("/v1/runs/run_1/events")
+    end
+    assert_equal("30", error.headers["retry-after"])
+  end
+
   it "maps an HTTP timeout to TimeoutError" do
     stub_request(:get, "https://example.test/health").to_raise(::HTTP::TimeoutError)
     assert_raises(::HermesAgent::Client::TimeoutError) do

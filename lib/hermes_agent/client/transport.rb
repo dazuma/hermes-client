@@ -139,7 +139,7 @@ module HermesAgent
         response = map_request_errors { session.post(url_for(path), json: body, headers: headers) }
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: response.body.to_s,
-                                       headers: response.headers.to_h)
+                                       headers: normalize_headers(response.headers))
         end
         Result.new(body: map_stream_errors(response.body), headers: normalize_headers(response.headers))
       end
@@ -161,7 +161,7 @@ module HermesAgent
         response = map_request_errors { session.get(url_for(path)) }
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: response.body.to_s,
-                                       headers: response.headers.to_h)
+                                       headers: normalize_headers(response.headers))
         end
         map_stream_errors(response.body)
       end
@@ -273,7 +273,7 @@ module HermesAgent
         body = response.body.to_s
         unless response.status.success?
           raise APIError.from_response(status: response.code, body: body,
-                                       headers: response.headers.to_h)
+                                       headers: normalize_headers(response.headers))
         end
         body.empty? ? {} : Util.parse_json(body)
       end
