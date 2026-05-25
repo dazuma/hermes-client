@@ -7,4 +7,5 @@ issue_number_suffix_handling: delete
 
 gems:
   - name: hermes-client
+    version_rb_path: lib/hermes_agent/client/version.rb
     gh_pages_directory: gem
