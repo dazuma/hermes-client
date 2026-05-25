@@ -181,6 +181,26 @@ describe ::HermesAgent::Client::Entities::Job do
     assert_nil(job.last_delivery_error)
   end
 
+  it "reads the failed last-run outcome fields" do
+    # A failed agent run: last_status flips to "error" and last_error carries
+    # the exception-prefixed message; a recurring job stays scheduled (verified
+    # live 2026-05-24 against hermes-test).
+    failed = ::HermesAgent::Client::Entities::Job.new(
+      "state" => "scheduled",
+      "last_status" => "error",
+      "last_error" => "RuntimeError: Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. " \
+                      "Please pass a valid API key.",
+      "last_delivery_error" => nil
+    )
+    assert_equal("error", failed.last_status)
+    assert_equal(
+      "RuntimeError: Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. Please pass a valid API key.",
+      failed.last_error
+    )
+    assert_nil(failed.last_delivery_error)
+    assert_equal("scheduled", failed.state)
+  end
+
   it "reads the delivery target" do
     assert_equal("local", job.deliver)
   end
