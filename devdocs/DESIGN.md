@@ -115,50 +115,24 @@ HermesAgent::Client::Error                 (base; rescue this to catch all)
 `APIError` carries `#status`, `#headers`, `#body` (raw) and a parsed
 `#error` hash when the server returns a structured error.
 
-#### Observed error response shape
+The server emits **three** error-envelope shapes (nested OpenAI-style JSON; a
+flat `{error: "<string>"}` for jobs business errors; bare text for router-level
+404/405) — full catalog and examples in
+[`hermes-api-server.md`](hermes-api-server.md) under "Error model". What that
+means for the client:
 
-Probed against the `hermes-test` profile (`toys gateway probe` with bad
-tokens / malformed bodies / bad paths). There are **two distinct error
-families**, and the client must tolerate both:
-
-- **Application-level errors** (auth failure, body validation, missing
-  resource) return **OpenAI-style JSON**: `{ "error": { "message", "type",
-  "param"?, "code"? } }`. Examples observed:
-  - `401` bad/empty token → `{message: "Invalid API key", type:
-    "invalid_request_error", code: "invalid_api_key"}`
-  - `400` empty `/v1/responses` body → `{message: "Missing 'input' field",
-    type: "invalid_request_error", param: null, code: null}`
-  - `400` wrong `input` type → `{message: "'input' must be a string or
-    array", ...}`; `400` malformed JSON → `{message: "Invalid JSON in request
-    body", type: "invalid_request_error"}` (no `param`/`code` keys at all)
-  - `400` empty `/v1/chat/completions` body → `{message: "Missing or invalid
-    'messages' field", type: "invalid_request_error"}`
-  - `404` on a real route with a bad id (`GET /v1/responses/{bad}`) →
-    `{message: "Response not found: ...", type: "invalid_request_error"}`
-  - `404` on a run route with an unknown/evicted id (`GET /v1/runs/{bad}`,
-    `POST .../stop`, `POST .../approval`) → `{message: "Run not found: ...",
-    type: "invalid_request_error", param: null, code: "run_not_found"}`
-    (run-existence is checked **before** the body, so a bad `run_id` 404s
-    regardless of body)
-  - `400` bad approval choice (`POST /v1/runs/{id}/approval`) → `{message:
-    "Invalid approval choice; expected one of: once, session, always, deny",
-    type: "invalid_request_error", param: null, code: "invalid_approval_choice"}`
-  - `400` wrong `conversation_history` type (`POST /v1/runs`) → `{message:
-    "'conversation_history' must be an array of message objects", type:
-    "invalid_request_error"}`
-- **Framework/router-level errors** return **bare text, not JSON**:
-  - `404` on an unrouted path → `404: Not Found`
-  - `405` wrong method on a real route → `405: Method Not Allowed`
-
-Implications for the implementation:
-- `APIError#error` parsing must **not assume JSON** — the router-level 404/405
-  bodies are plain text, so parse defensively and fall back to `#body`.
-- Within the structured family the field set is **inconsistent**: `message`
-  and `type` are always present, but `param` and `code` may be `null` or
-  omitted entirely. Treat them as best-effort readers.
-- `type` is **not** a reliable discriminator — it was `invalid_request_error`
-  for every case including `401`. Map HTTP **status** to the error subclass
-  (as the hierarchy already does); do not key off `type`/`code`.
+- **Map HTTP status to the subclass**, never `type`/`code`. `type` is
+  `invalid_request_error` for nearly everything (including `401`), so it is not a
+  discriminator; the hierarchy above keys off status alone.
+- **`APIError#error` parsing must not assume JSON.** Parse defensively and fall
+  back to `#body` for the bare-text router errors, and accept **either** a nested
+  `error.message` **or** a flat string `error` (jobs). This lives in
+  `APIError.parse_error_payload`.
+- **Structured fields are best-effort:** `message`/`type` are usually present but
+  `param`/`code` may be `null` or omitted — treat the readers accordingly.
+- A bad jobs `schedule` is a **`500`** that is really invalid input, so the
+  `>= 500` → `ServerError` body is at least partly user-caused (documented on the
+  jobs methods so callers aren't surprised).
 
 ### Streaming
 
@@ -195,137 +169,43 @@ Events are wrapper objects too. Chat streaming surfaces the server's custom
 `hermes.tool.progress` events as a distinct event type (separate from text
 deltas) so tool activity does not pollute assistant text.
 
-### Observed streaming event types
+#### Event wrapping & aggregation
 
-Captured by probing the `hermes-test` profile (`toys gateway chat/respond
---stream`); refine as we see more cases:
+The three streams frame events differently (full frame shapes, event sequences,
+and field lists in [`hermes-api-server.md`](hermes-api-server.md) under each
+endpoint's streaming notes). `Stream` is told how to **classify** and how to
+**aggregate** per endpoint:
 
-- **Chat completions** stream OpenAI-style: **unnamed** SSE frames (no `event:`
-  line) whose `data:` is a `chat.completion.chunk` object. The first chunk
-  carries `delta.role`, subsequent chunks carry `delta.content`, and the final
-  chunk has an empty `delta`, `finish_reason: "stop"`, and a `usage` block. The
-  stream terminates with a literal `data: [DONE]` sentinel. All chunks (and the
-  tool-progress frames below) share a single stable `id` for the whole stream.
-  - **`hermes.tool.progress`** events (captured by prompting `hermes-test` to
-    "list the files in my current directory", which made the server agent
-    autonomously run tools) are the one **named** frame in the chat stream:
-    `event: hermes.tool.progress` with a `data:` payload that — unlike the
-    Responses API's named events — has **no `type` field and no
-    `sequence_number`**. They are **interleaved** between the role chunk and
-    the content chunks (tools run before the assistant text is produced). Each
-    tool call emits **two** events keyed by a `toolCallId` (`call_…`): a
-    `status: "running"` event carrying `{ tool, emoji, label, toolCallId,
-    status }` and a `status: "completed"` event carrying only `{ tool,
-    toolCallId, status }` (no `emoji`/`label`). `tool` is the tool name (e.g.
-    `search_files`, `terminal`); `label` is a short human-facing descriptor of
-    the invocation (e.g. the search glob `*`, or the command `ls -F`). A single
-    turn can run **multiple** tools (the observed turn ran `search_files` then
-    `terminal`, four frames total). `status` appears to be a pure **lifecycle**
-    marker (tool started / tool finished executing), **not** a success/failure
-    signal: probing three deliberate failure modes — `read_file` on a
-    nonexistent path, and `terminal`/`sqlite3` against a permission-protected
-    file — every call still reported `running` → `completed`. Tool *failures*
-    are surfaced as the tool's result content (which the model then narrates),
-    not as a distinct progress status; no `error`/`failed` status was
-    observed. (A framework-level refusal or a timeout might still produce
-    another status — untested.) These frames are **not**
-    `chat.completion.chunk` objects (no `choices`/`delta`), so the streaming
-    layer routes them — by SSE event name — to the distinct
-    `ChatToolProgress` event type (still yielded to the caller's block) and
-    keeps them out of the `ChatCompletion.from_chunks` delta aggregation.
-- **Responses API** streams **named** events; each `data:` payload repeats the
-  name in a `type` field and carries a monotonic `sequence_number` (0-based).
-  Full observed order for a simple text turn: `response.created` (seq 0) →
-  `response.output_item.added` (seq 1) → `response.output_text.delta` (seq 2,
-  one per delta) → `response.output_text.done` (seq 3) →
-  `response.output_item.done` (seq 4) → **`response.completed`** (seq 5, the
-  terminal event). There is no `response.done` and **no `[DONE]` sentinel** —
-  the stream simply ends after `response.completed` (unlike chat completions,
-  which do terminate with `data: [DONE]`).
-  - `response.created` carries the `response.id` (`resp_…`) used for
-    `previous_response_id` chaining, plus `status: "in_progress"`, `model`,
-    `created_at`, and an empty `output: []`.
-  - The delta events thread an `item_id` (`msg_…`), `output_index`, and
-    `content_index`; `response.output_text.delta` carries the incremental
-    `delta` string while `response.output_text.done` carries the assembled
-    `text`. (Both also carry a `logprobs` array — **hardcoded empty** `[]`
-    server-side, never populated; see the models/logprobs note below.)
-  - The `response.output_item.added` / `response.output_item.done` events nest
-    the output item under an **`item`** key (`{ id, type, status, role,
-    content }`) alongside `output_index` — not under `response`. `added` has
-    `status: "in_progress"` with empty `content`; `done` has `status:
-    "completed"` with the assembled `content`. `ResponseStreamEvent#item`
-    wraps it as a `ResponseOutputItem`; `#response` wraps the `response` key
-    present only on `response.created`/`response.completed`.
-  - **`response.completed` carries the full final `response` object** —
-    `status: "completed"`, the complete `output` array (message items with
-    `content: [{type: "output_text", text}]`), and a `usage` block using
-    Responses-API field names `{ input_tokens, output_tokens, total_tokens }`
-    (note: *not* chat's `prompt_tokens`/`completion_tokens`). The `Stream`
-    aggregator can therefore take the final `Response` straight from this
-    event rather than reconstructing it from deltas.
-  - A **tool-executing turn** (captured with the same "list the files in my
-    current directory" prompt) uses the **same** `response.output_item.added` /
-    `.done` events — there are **no `hermes.tool.progress` frames** (that custom
-    event is chat-completions-only) and **no separate function-call event
-    types**. Each tool call and its result are ordinary output items, each with
-    its own `output_index`, in sequence: a `function_call` item (`{ id: fc_…,
-    type, status, name, call_id, arguments }`), then a `function_call_output`
-    item (`{ id: fco_…, type, call_id, status, output: [{ type: "input_text",
-    text }] }`), repeated per tool, then the final `message` item — all also
-    echoed in `response.completed`'s `output` array. Notable details: the
-    `arguments` JSON string is delivered **whole** in the `added` event (no
-    `response.function_call_arguments.delta` streaming). As with chat, `status`
-    is lifecycle-only: a tool that *times out* (`"[Command timed out after
-    60s]"`) still reports `status: "completed"`, and the model recovers by
-    calling another tool.
-  - **Reconciled — `output` shape and `id`/`status` differ by representation**
-    (probed by running one `terminal` turn and capturing its stream, its
-    non-streaming POST, and a GET of the same id):
-    - A `function_call_output`'s **`output`** is an **array of content parts**
-      (`[{ type: "input_text", text }]`, the `text` itself a JSON string) in
-      **every streaming** form — both the per-item `output_item.added`/`.done`
-      events *and* the terminal `response.completed.output` — but a **raw JSON
-      string** in the **non-streaming** POST and GET bodies. So the *same*
-      `output` field is an Array on a streamed `Response` and a String on a
-      fetched/created one; the client tolerates both (`ResponseOutputItem#output`
-      passes the raw value through, and `#output_text` normalizes to the
-      string).
-    - Output-item **`id`** (`fc_…`/`fco_…`/`msg_…`) and **`status`** appear
-      **only** on items inside the per-item streaming events; they are absent
-      from the non-streaming `output` array *and* from the streamed terminal
-      `response.completed.output`. So `ResponseOutputItem#id`/`#status` are
-      populated for items obtained via stream events and `nil` for items read
-      off a final `Response#output`.
-- **Runs API** (`runs.stream_events`, `GET /v1/runs/{id}/events`) streams
-  **plain `data:` frames** — no SSE `event:` line and **no `[DONE]` sentinel**
-  (unlike *both* chat and Responses) — each carrying its type in an **`"event"`
-  string field** plus `run_id` and a float `timestamp`. There is **no
-  `run.started`** head frame: the stream begins at the first content event, and
-  `create`'s `status: "started"` is the only start signal. Observed types:
-  - `tool.started` (`tool`, `preview`) and `tool.completed` (`tool`, `duration`
-    float, `error` boolean) bracket each tool call. As in the other streams
-    `error` is the *result* signal, not lifecycle: a failing command — or a
-    **denied** approval — gives `error: true` yet the run still completes; an
-    **approved** one gives `error: false`.
-  - `message.delta` (`delta` chunk) and `reasoning.available` (`text`, full
-    string) carry assistant output.
-  - Terminal: `run.completed` (`output` full string, `usage`
-    `{input,output,total}_tokens`) on success, or `run.cancelled` (carries
-    *only* `event`/`run_id`/`timestamp` — no `output`/`usage`) after a `stop`;
-    when a run is stopped before doing any work, that single frame is the entire
-    replay. **`run.failed` (reproduced 2026-05-24)** carries `event`/`run_id`/
-    `timestamp` plus an **`error` string** (and no `output`/`usage`) — e.g.
-    `error: "Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. ..."`. Like
-    `cancelled`, a failed run replays only this single terminal frame.
-  - **Approval frames** for a gated tool: `approval.request` (`command`,
-    `pattern_key`, `pattern_keys[]`, `description`, `choices[]`) when the run
-    parks at `waiting_for_approval`, then `approval.responded` (`choice`,
-    `resolved`) once the caller answers via `respond_approval` (see the runs
-    resource section).
-  - Replay is retention-bounded: subscribing to an already-terminal run still
-    works briefly, then `404`s — that expiry is **not** a function of how the
-    run ended (completed and cancelled both replay until eviction).
+- **Classification** — `Stream`'s `event_class:` is either a single `Entity`
+  subclass (wrapping every frame) or a **callable that picks the class from the
+  frame's SSE `event:` name**:
+  - **Chat** uses the callable: the one named frame (`event: hermes.tool.progress`)
+    routes to **`ChatToolProgress`**, everything else (the unnamed
+    `chat.completion.chunk` frames) to **`ChatCompletionChunk`**. Both are still
+    yielded to the caller's block, so tool activity is visible but kept out of the
+    text aggregation.
+  - **Responses** passes a **single class** (`ResponseStreamEvent`) since its event
+    identity is carried in-payload as `type`, not on an SSE `event:` line.
+    `ResponseStreamEvent#item` wraps the per-item `item` key as a
+    `ResponseOutputItem`; `#response` wraps the `response` key present only on
+    `response.created`/`response.completed`.
+  - **Runs** passes a single class (`RunEvent`) keyed off the in-payload `event`
+    string.
+- **Aggregation** — the injected aggregator builds the final return object:
+  - **Chat** sends no final aggregate object, so **`ChatCompletion.from_chunks`**
+    reconstructs one from the deltas (and ignores the non-chunk tool-progress
+    frames). See the single-choice note in the chat resource section.
+  - **Responses** emits the full final object on the terminal `response.completed`,
+    so **`Response.from_events`** takes it straight from that event — no delta
+    reconstruction, and there is no `[DONE]` sentinel to watch for.
+- **`ResponseOutputItem` tolerates representation drift** (the server returns the
+  same logical item two ways — see the wire doc's "representation differences"):
+  - `#output` may be an **Array** of content parts (streaming) or a **raw JSON
+    String** (non-streaming POST/GET); the reader passes the raw value through and
+    `#output_text` normalizes to the string.
+  - `#id`/`#status` are populated only for items seen via **per-item streaming
+    events**; they are `nil` for items read off a final `Response#output` (the
+    server omits them there).
 
 ## Client construction and configuration
 
@@ -395,33 +275,25 @@ client.chat.stream_create(messages:, session_id:, session_key:, &block)
                                               #   (no idempotency_key: ignored on streams)
 ```
 
-- `messages` is the OpenAI-style array; content may include `image_url` parts
-  (http(s) or `data:` URIs) for inline images.
+- `messages` is the OpenAI-style array; content may include `image_url` parts for
+  inline images.
 - `session_id:` / `session_key:` are optional; when given they are sent as the
-  `X-Hermes-Session-ID` / `X-Hermes-Session-Key` request headers. The returned
-  `ChatCompletion` exposes the server's `#session_id` / `#session_key` (read
-  from the response headers) regardless of whether they were sent.
-- `idempotency_key:` (optional, `create` only) is sent as the `Idempotency-Key`
-  header for safe retries; the server replays the cached result within ~5 min.
-  The replay is **transparent** (no client-visible signal — see the headers note
-  above), so nothing is surfaced on the return value. Not offered on
-  `stream_create` (the server ignores it there).
-- OpenAI-compatible on the wire; additional sampling params flow through.
-- No `model` field is sent (server configures the model; it ignores a
-  client-supplied one). Callers can still pass one via `**extra`.
-- The OpenAI `n` parameter (multiple choices) is **ignored** by the server —
-  it always returns a single `choices[0]` (probed 2026-05-24; see the
-  single-choice note under "Known limitations"). The client models a single
-  choice accordingly.
-- Observed (probed against `hermes-test`) non-streaming response: `{ id:
-  "chatcmpl-…", object: "chat.completion", created, model, choices: [{ index,
-  message: { role, content }, finish_reason }], usage: { prompt_tokens,
-  completion_tokens, total_tokens } }`. `ChatCompletion`/`ChatChoice`/
-  `ChatMessage`/`ChatUsage` mirror this.
-- Streaming (`stream_create`, body `stream: true`): unnamed `data:` frames each
-  a `chat.completion.chunk` (see "Observed streaming event types"), terminated
-  by `data: [DONE]`. No final aggregate is sent, so `ChatCompletion.from_chunks`
-  reconstructs one from the deltas.
+  `X-Hermes-Session-ID` / `X-Hermes-Session-Key` request headers — chat is the
+  only endpoint that honors them on the request
+  ([`hermes-api-server.md`](hermes-api-server.md) → Session & memory headers). The
+  returned `ChatCompletion` exposes the server's `#session_id` / `#session_key`
+  from the **response** headers regardless of whether they were sent.
+- `idempotency_key:` (optional, `create` only) → the `Idempotency-Key` header.
+  The replay is **transparent** (nothing to surface — see Return values). Not
+  offered on `stream_create` (the server ignores it on streams).
+- No `model` field is sent (server-configured); callers can pass one (or extra
+  sampling params) via `**extra`. The server **ignores OpenAI `n`** and always
+  returns a single `choices[0]`, so the client models one choice (see Known
+  limitations).
+- Response is modeled by `ChatCompletion` / `ChatChoice` / `ChatMessage` /
+  `ChatUsage`. Streaming has no final aggregate, so `ChatCompletion.from_chunks`
+  reconstructs one from the `ChatCompletionChunk` deltas (see Event wrapping).
+  Wire shapes: [`hermes-api-server.md`](hermes-api-server.md) → Chat Completions.
 
 ### `client.responses` — Responses API (`/v1/responses`, server-side state)
 
@@ -464,49 +336,26 @@ client.responses.conversation(previous_response_id: id) # resume an id-tracked t
   - Not thread-safe: a `Conversation` is one sequential thread; issue and (for
     streaming) consume each turn before the next.
 
-- Server persists conversation state; chain multi-turn either by passing the
-  prior `previous_response_id` or a stable `conversation` name.
-- No `session_id:` / `session_key:` params: this endpoint ignores those request
-  headers. The returned `Response` from `create` / `stream_create` still exposes
-  the server-generated `#session_id` (read from the response header);
-  `responses.get` returns no session header, so its `#session_id` is `nil`.
-- `idempotency_key:` (optional, `create` only) is sent as the `Idempotency-Key`
-  header for safe retries; the server replays the cached result within ~5 min.
-  The replay is **transparent** (no client-visible signal — see the headers note
-  above), so nothing is surfaced on the return value. Not offered on
-  `stream_create` (the server ignores it there).
-- Inline images supplied as `input_image` input parts.
-- Storage is capped server-side (~100 responses, LRU eviction) — callers should
-  not assume older responses remain retrievable.
-- No `model` field is sent (server configures the model). `previous_response_id`
-  / `conversation` are omitted from the body when nil. Callers can pass
-  unmodeled fields via `**extra`.
-- Observed (probed against `hermes-test`) non-streaming response (`POST` and
-  `GET` return the same object): `{ id: "resp_…", object: "response", status:
-  "completed", created_at, model, output: [...], usage: { input_tokens,
-  output_tokens, total_tokens } }` — note Responses-API usage field names, not
-  chat's `prompt_tokens`/`completion_tokens`. `Response`/`ResponseOutputItem`/
-  `ResponseContent`/`ResponseUsage` mirror this.
-  - `output` is a **heterogeneous array**. A plain turn has a single `message`
-    item (`{ type: "message", role: "assistant", content: [{ type:
-    "output_text", text }] }`). A turn that runs tools (observed via a named
-    `conversation` triggering the server's `memory` tool) interleaves
-    `function_call` items (`{ type, name, arguments (raw JSON string), call_id }`)
-    and `function_call_output` items (`{ type, call_id, output (raw JSON
-    string) }`) before the final `message`. `Response#output_text` aggregates
-    only the `message` items' text. (Note: in the **streaming** representation
-    `output` is instead an array of content parts and items carry `id`/`status`
-    — see the reconciliation note under "Observed streaming event types".)
-  - Chaining: passing `previous_response_id` carries context (verified — a
-    follow-up arithmetic turn produced the correct sum), but the chained
-    response does **not** echo `previous_response_id` in its body.
-- `DELETE /v1/responses/{id}` returns `{ id, object: "response", deleted: true }`
-  (modeled by `ResponseDeletion`); a subsequent `GET` of that id returns the
-  `404 "Response not found: …"` documented under the error section.
-- Streaming (`stream_create`, body `stream: true`): named SSE events (see
-  "Observed streaming event types"); the assembled `Response` is taken straight
-  from the terminal `response.completed` event by `Response.from_events` (no
-  reconstruction from deltas needed, and no `[DONE]` sentinel).
+- Chain multi-turn either by passing the prior `previous_response_id` or a stable
+  `conversation` name; both are omitted from the body when nil. Inline images go
+  in as `input_image` input parts. No `model` is sent; `**extra` carries unmodeled
+  fields.
+- **No `session_id:` / `session_key:` params** — this endpoint does not honor those
+  request headers. The `Response` from `create`/`stream_create` still exposes the
+  server-generated `#session_id` (from the response header); `responses.get`
+  returns no session header, so its `#session_id` is `nil`.
+- `idempotency_key:` (optional, `create` only) behaves as on chat — transparent
+  replay, not offered on `stream_create`.
+- **Entities:** `Response` / `ResponseOutputItem` / `ResponseContent` /
+  `ResponseUsage` (`ResponseDeletion` for `delete`). `Response#output` is a
+  heterogeneous array (a `message` item, optionally preceded by `function_call` /
+  `function_call_output` items for tool turns); `#output_text` aggregates only the
+  `message` items' text. `ResponseOutputItem` tolerates the streaming-vs-fetched
+  representation drift (see Event wrapping). The assembled `Response` from a stream
+  comes straight from the terminal `response.completed` via `Response.from_events`.
+  Wire shapes, the `store`/`truncation`/`conversation_history` request fields, the
+  ~100-response storage cap, and the delete/404 behavior:
+  [`hermes-api-server.md`](hermes-api-server.md) → Responses API.
 
 ### `client.runs` — Runs API (long-running agent runs)
 
@@ -523,100 +372,34 @@ client.runs.respond_approval(run_id, choice:)  # POST /v1/runs/{id}/approval
 ```
 
 Unlike chat/responses, a run is **server-side asynchronous**: `create` returns
-immediately (HTTP `202`) with only `{ run_id, status: "started" }`, and progress
-is tracked by polling `get` or subscribing to `stream_events`. `run_id` is
-`run_` + 32 lowercase hex chars. (All shapes below were probed against
-`hermes-test`; folded from `devdocs/hermes-api-server.md`.)
+immediately (`202`) with only `{ run_id, status: "started" }`, and progress is
+tracked by polling `get` or subscribing to `stream_events`. (Create-body
+semantics, the status lifecycle, the failed-run analysis, retention/eviction, and
+the full approval-flow wire shapes are in
+[`hermes-api-server.md`](hermes-api-server.md) → Runs API.)
 
-- Create body:
-  - `input:` (**required**, String) — the user prompt; a body of just `{input}` works.
-  - `instructions:` — a system directive layered over the agent prompt (**verified honored**).
-  - `conversation_history:` — an **OpenAI-style message array** (`[{role, content}, …]`),
-    loaded into context. **Server-validated**: a non-array → `400
-    "'conversation_history' must be an array of message objects"`.
-  - `previous_response_id:` — loads a stored `/v1/responses` response's context
-    into the run. **Load-if-present, not validated**: an unknown id is silently
-    ignored (still `202`, run completes, no context loaded) — contrast
-    `conversation_history`.
-  - `session_id:` — a **correlation label only**, stored and echoed back in the
-    poll (defaults to the `run_id`). It is **not** inline conversation context
-    and did not observably scope a searchable history — confirm session
-    semantics from the server, not the flaky test gateway.
-  - No `model:` is sent (server configures the model); whether the endpoint
-    accepts one is unconfirmed. Unmodeled fields go via `**extra`.
-  - (Prior-context fields were verified by **token accounting** — `usage.input_tokens`
-    rises when context loads — because the test gateway's persistent-memory
-    confabulation makes content-recall checks unreliable.)
-- `Run` (returned by both `create` and `get`; `#id` aliases `#run_id`):
-  `object: "hermes.run"`, `run_id`, `status`, `created_at`/`updated_at` (epoch
-  floats), `session_id`, `model`, `last_event`, `output`, `usage`
-  (`{input,output,total}_tokens`), and — **only on a `failed` run** — an
-  `error` string. **`output` and `usage` are nullable** — present on a
-  `completed` run but **absent when `cancelled` or `failed`** (and before
-  terminal) — so readers must tolerate `nil`. A **`failed`** run looks like a
-  `cancelled` one (no `output`/`usage`) **plus** `error: "<string>"` and
-  `last_event: "run.failed"` (reproduced 2026-05-24; the `error` is the
-  upstream message, e.g. a Gemini 400). `create`'s minimal Run carries only
-  `run_id` + `status`. **`model` is echoed from the request** (`create` accepts
-  a `model:` field and stores it on the Run) **but ignored** — the run always
-  uses the gateway-configured model (verified: a bogus `model:` was echoed back
-  yet the run completed normally on the real model).
-- Status lifecycle: `started` → `running` → terminal `completed` | `cancelled`
-  | `failed`; a gated tool parks the run at
-  **`waiting_for_approval`**, and `stop` adds a transient `stopping`. Run
-  records — and especially the event buffer — are retained only **briefly**
-  after terminal, then evicted (`get`/`stop`/`approval` → `404 run_not_found`).
-- **What makes a run `failed` (source-derived, `gateway/platforms/api_server.py`):**
-  `failed` is a **model/provider/runtime-level** failure, not a tool failure.
-  The server-side run task sets `failed` via two paths that emit the **identical**
-  wire shape: (a) a *structured* failure — `run_conversation` returns
-  `{failed: True, error}` for a **non-retryable provider error** (e.g. a 4xx
-  with no credential-pool/fallback to recover with), and (b) an **unhandled
-  exception** (`error=str(exc)`). Things that do **not** cause `failed`: a tool
-  erroring or even `kill -9 $$` (the agent narrates and the run still
-  `completed`); a denied approval (also `completed`); and the agent inactivity
-  timeout (`agent.gateway_timeout`, default 1800s) — that path lives in the
-  *messaging* dispatcher, **not** the `/v1/runs` handler, which calls
-  `run_conversation` directly with no `wait_for`. Practical repro for tests:
-  point the provider at a bad key/endpoint (a bad `GOOGLE_API_KEY` yields the
-  Gemini-400 `error` above), which fails fast at near-zero token cost.
-- `stop` returns `200 { run_id, status: "stopping" }` (cooperative; the run then
-  resolves to `cancelled`). It need not model as a `Run` — a small ack suffices.
-- `stream_events` uses the same block-or-enumerator pattern, but over **plain
-  `data:` frames** (no SSE `event:` line, no `[DONE]` sentinel — unlike *both*
-  chat and Responses); the event type is an `"event"` string field inside each
-  payload. See "Observed streaming event types". Replay works for an
-  already-terminal run during the retention window.
-
-**Approval workflow** (human-in-the-loop dangerous-command gating; only active
-when the server profile is in `approvals.mode: manual` with a non-container
-backend — container backends skip the checks):
-
-- When the agent attempts a dangerous command (`rm -r`, `dd if=`, `DROP TABLE`,
-  `> /etc/`, …), the run parks at `waiting_for_approval` and the event stream
-  emits **`approval.request`** (`command`, `pattern_key`, `pattern_keys[]`,
-  `description`, `choices: [once, session, always, deny]`). There is **no
-  approval id** — the pending approval is keyed by `run_id` (one outstanding per
-  run), so `respond_approval` needs only the `run_id` + `choice`.
-- `respond_approval(run_id, choice:)` → body `{"choice": "<once|session|always|
-  deny>"}`. Invalid choice → `400 invalid_approval_choice` (message lists the
-  four valid values). Success → `200 { object: "hermes.run.approval_response",
-  run_id, choice, resolved }` (`resolved` = count resolved), and the stream
-  emits **`approval.responded`** (`choice`, `resolved`).
-- **No auto-timeout** observed: a parked run waited ~89s with no auto-deny
-  despite the docs' `approvals.timeout: 60` — treat a gated run as blocking
-  **indefinitely** pending a response.
-- Outcome: **deny** → the gated `tool.completed` carries `error: true` and the
-  agent narrates an abort, **but the run still ends `completed`** (deny ≠
-  failure). **approve** (`once` verified) → the tool executes, `tool.completed`
-  carries `error: false`, the run resumes to `completed`. The only wire
-  difference between the two is `tool.completed.error`. ⚠️ `always` writes a
-  permanent `command_allowlist` entry (server config mutation) and `session`
-  auto-approves the pattern for the rest of the gateway session — prefer
-  `once`/`deny` unless those side effects are intended.
-- `/v1/capabilities` advertises all five run routes and the
-  `run_submission`/`run_status`/`run_events_sse`/`run_stop`/`run_approval_response`
-  + `approval_events`/`tool_progress_events` features.
+- **Create params** the client exposes: `input:` (required), `instructions:`,
+  `conversation_history:` (OpenAI message array), `previous_response_id:`, and
+  `session_id:` (a correlation label, not inline context). No `model:` param —
+  the server accepts one but ignores it (always the gateway-configured model), so
+  it is only reachable via `**extra`.
+- **`Run`** is returned by both `create` and `get` (`#id` aliases `#run_id`).
+  `create`'s minimal Run carries only `run_id` + `status`. **`output` and `usage`
+  are nullable** — present on a `completed` run, **absent when `cancelled`/`failed`**
+  and before terminal — so readers must tolerate `nil`; a `failed` run adds an
+  `error` string. Entity files hold `Run` plus `RunUsage`/`RunEvent`/etc.
+- **`stop`** returns a small ack (`{ run_id, status: "stopping" }`); modeled as a
+  plain ack, not a `Run`.
+- **`stream_events`** is block-or-enumerator over `RunEvent` (the `event`-keyed
+  frames; see Event wrapping). Replay works for an already-terminal run only
+  during the retention window.
+- **`respond_approval(run_id, choice:)`** answers a gated dangerous-command
+  request. There is one outstanding approval per run (keyed by `run_id`), so the
+  call needs only `run_id` + `choice` (`once`/`session`/`always`/`deny`). ⚠️
+  `always` writes a permanent server `command_allowlist` entry and `session`
+  auto-approves for the rest of the gateway session — prefer `once`/`deny` unless
+  those side effects are intended. (Gating is only active under
+  `approvals.mode: manual` with a non-container backend.)
 
 ### `client.jobs` — Jobs API (scheduled background work, under `/api/jobs`)
 
@@ -636,61 +419,26 @@ client.jobs.trigger(job_id)                   # POST   /api/jobs/{id}/run    => 
 ```
 
 (Plus `**extra` on `create`/`update`, per the request-parameter convention —
-omit nil fields from the body. Do **not** add `model:`/`provider:`/`base_url:`/
-`workdir:`/`profile:`/`context_from:` params — the API ignores them, see below.)
+omit nil fields from the body. The endpoints live under `/api/jobs`, not `/v1`,
+so `Jobs` carries its own prefix. Full request/entity/lifecycle/error wire detail:
+[`hermes-api-server.md`](hermes-api-server.md) → Jobs API.)
 
-- Note these live under `/api/jobs`, not `/v1` — `Jobs` carries its own prefix.
-- The Jobs endpoints were **not** present in the `hermes-test`
-  `/v1/capabilities` advertisement, so they may be gated, versioned separately,
-  or absent in some builds — confirm against a server that exposes them.
+**Client API decisions:**
 
-**Locked design decisions (2026-05-24):**
-
-- **`trigger`, not `run`, for `POST /api/jobs/{id}/run`.** Matches the docs page's
-  own verb ("Trigger the job to run immediately") and avoids colliding with the
-  `runs` resource's vocabulary. The call is **asynchronous** — it advances the
-  job's `next_run_at` to "now" for the scheduler's next tick and returns the
-  `Job`; it does **not** block on or return the run's result.
-- **`get` on a reaped job raises `NotFoundError` like any 404 — no special
-  "gone" return.** One-shot (`once`) jobs and `repeat.times`-capped jobs are
-  **deleted by the server once exhausted** (verified live: a `once` job is gone
-  after its single fire; a `repeat:2` job survived run #1 then vanished after run
-  #2). There is no terminal job *state* to observe — `GET` simply starts
-  returning `404 Job not found`. Document this on `get`/`trigger`: a client
-  cannot poll a one-shot or final-run job for its outcome after it completes.
-
-**Wire details confirmed by probing (see `hermes-api-server.md` for the full
-writeup):**
-
-- `create` **requires** `name` and `schedule`; the handler also forwards only
-  `prompt`, `repeat` (int), `deliver`, and `skills`. **`script` and `no_agent`
-  are silently dropped** (source-confirmed 2026-05-24: the create handler does
-  not pass them to the underlying `create_job`, so they stay at their defaults —
-  `no_agent: false`, `script: null` — regardless of what is sent). Our client's
-  `create`/`update` still expose `script:`/`no_agent:` as params; treat them as
-  **no-ops on this server** (kept for forward-compat / other deployments). Tighten
-  or document this if it matters. `schedule` is a string parsed server-side into
-  a tagged union (`once`/`interval`/`cron`). Returns **`200`** (not the runs `202`).
-- `update` (PATCH) is a partial merge over the same writable fields and
-  **re-parses `schedule`** (recomputing `next_run_at`).
-- **`model`/`provider`/`base_url`/`workdir`/`profile`/`context_from` are NOT
-  writable via this API** — silently ignored in create/PATCH (stay `null`). Do
-  not expose them as `create`/`update` params; they are read-only entity readers.
-- **Mixed error envelope:** auth `401` is the nested `/v1` shape
-  (`{error:{message,type,code}}`); jobs business errors (`400`/`404`/`500`) are a
-  **flat** `{error: "<string>"}`. `APIError` parsing must accept both. (Bad
-  `schedule` is a `500`; bad `deliver` is **not** validated on write.)
-- `pause`/`resume` are idempotent (no error when already in the target state).
-- **Run outcome fields** (set by the scheduler after each fire, verified live):
-  a **success** sets `last_run_at` (ISO-8601), `last_status: "ok"`, leaves
-  `last_error`/`last_delivery_error` null, and bumps `repeat.completed`. A
-  **failed** agent run sets `last_status: "error"` and `last_error` to the
-  **exception-prefixed** message (e.g. `"RuntimeError: Gemini HTTP 400
-  (INVALID_ARGUMENT): API key not valid. ..."` — note the `RuntimeError:`
-  prefix, unlike the run's bare `error`); `last_delivery_error` stays null (the
-  agent failed before delivery, which is tracked separately), `repeat.completed`
-  still bumps, and a recurring job stays `state: "scheduled"` (it is not
-  disabled by a failed run). `last_status` is thus `"ok"` | `"error"` | `nil`.
+- **`trigger`, not `run`, for `POST /api/jobs/{id}/run`** — matches the docs' verb
+  and avoids colliding with the `runs` resource. It is **asynchronous**: it returns
+  the `Job` (with `next_run_at` advanced), not the run's result.
+- **A reaped job is a plain `404`.** One-shot and `repeat.times`-capped jobs are
+  **deleted by the server once exhausted** — there is no terminal job *state*, so
+  `get`/`trigger` on such a job raise `NotFoundError` like any 404. Documented on
+  those methods: a client cannot poll a finished one-shot job for its outcome.
+- **Params exposed:** `name`/`schedule` (required), `prompt`, `repeat`, `deliver`,
+  `skills`, plus `script`/`no_agent`. The server **silently drops `script`/`no_agent`**
+  and **ignores `model`/`provider`/`base_url`/`workdir`/`profile`/`context_from`** —
+  so the latter group is **not** exposed as params (read-only entity readers only),
+  while `script`/`no_agent` are kept as **no-ops on this server** for forward-compat.
+- **`include_disabled:`** on `list` → the undocumented `?include_disabled=true`
+  query param (default excludes disabled/paused jobs).
 
 **`Job` entity modeling** (follow [[entity-conventions]] — a reader for every
 field in the entity table in `hermes-api-server.md`; here are the resource-
@@ -704,15 +452,10 @@ specific decisions that convention alone doesn't settle):
     reader for each kind's payload (`run_at`, `minutes`, `expr`) that is `nil`
     when not of that kind. (Do **not** make polymorphic subclasses.)
   - **`JobRepeat`** for `repeat` — `times` (nullable) and `completed`.
-- **`origin` and `enabled_toolsets` are always `null` via this API** — not by
-  chance but because the create/PATCH handler never reads them from the body
-  (only chat-platform adapters / the in-agent `cronjob` tool set them). Keep
-  them as plain passthrough readers (raw value / `nil`), with `#to_h` / `#[]`
-  as the escape hatch — do **not** invent wrapper classes. For reference, their
-  internal shapes (confirmed from source, not client-observable): `origin` is a
-  dict `{platform, chat_id, thread_id?}` (used for `deliver: "origin"`);
-  `enabled_toolsets` is a plain `Array<String>` of toolset names. So even if a
-  shape ever surfaced, `enabled_toolsets` stays a name array, not objects.
+- **`origin` and `enabled_toolsets` are always `null` via this API** (the wire
+  doc explains why and gives their internal shapes). Keep them as plain
+  passthrough readers (raw value / `nil`), with `#to_h` / `#[]` as the escape
+  hatch — do **not** invent wrapper classes.
 - Boolean readers `enabled?` / `no_agent?` (per the boolean-reader convention).
 - **Timestamps stay strings.** `created_at` / `next_run_at` / `last_run_at` /
   `paused_at` are **ISO-8601 strings with offset** — unlike the runs/responses
@@ -732,9 +475,9 @@ against the live `hermes-test` gateway):
 - **`delete` maps `{ok: true}` → `true`** (the only endpoint not returning a job).
 - **Surprising error mapping to document + test:** `create`/`update` with an
   unparseable `schedule` raises **`ServerError` (500)**, not `BadRequestError`,
-  even though it's really invalid input (see the mixed-envelope note). The other
-  validation failures (missing `name`/`schedule`, bad id) are the expected
-  `400`/`404`. Note this in the method YARD so callers aren't surprised.
+  even though it's really invalid input (see Errors). The other validation
+  failures (missing `name`/`schedule`, bad id) are the expected `400`/`404`. Note
+  this in the method YARD so callers aren't surprised.
 
 ### `client.models` / `client.capabilities` — discovery (`/v1`)
 
@@ -744,32 +487,14 @@ client.capabilities.get # GET /v1/capabilities   => Capabilities
                         #   (chat_completions, responses_api, run_submission, ...)
 ```
 
-Observed (probing the `hermes-test` profile via `toys gateway`; refine as we
-see more), `GET /v1/capabilities` returns an object with
-`object: "hermes.api_server.capabilities"` and these top-level keys:
-
-- `platform` — the platform identifier, e.g. `"hermes-agent"`.
-- `model` — the configured server-side model id, e.g. `"hermes-test"`.
-- `auth` — `{ "type": "bearer", "required": true }`.
-- `runtime` — the execution model, e.g. `mode: "server_agent"`,
-  `tool_execution: "server"`, `split_runtime: false`, plus a human-readable
-  `description` string.
-- `features` — a boolean matrix: `chat_completions`/`chat_completions_streaming`,
-  `responses_api`/`responses_streaming`, `run_submission`, `run_status`,
-  `run_events_sse`, `run_stop`, `run_approval_response`, `tool_progress_events`,
-  `approval_events`, `cors`, plus the session-header names (see below).
-- `endpoints` — a map of logical name → `{ method, path }`: the server's own
-  advertisement of its routes (see the `runs`/jobs notes above).
-
-`GET /v1/models` returns the OpenAI list shape: `{ object: "list", data: [ {
-id, object: "model", created, owned_by, permission, root, parent } ] }`. The
-whole envelope is **hardcoded server-side** to a single model with
-**`permission: []`** (a literal empty array — never populated, so its element
-shape is undiscoverable on this server; this is why `Model#permission` is not
-exposed as a reader). The same applies to the **`logprobs: []`** arrays in the
-chat/Responses output (also hardcoded empty — the server reads no
-`logprobs`/`top_logprobs` request param). Treat both as structurally-always-empty.
-`GET /health` returns `{ "status": "ok", "platform": "hermes-agent" }`.
+Both are cheap, offline-friendly (no LLM call). `Capabilities` wraps the
+`/v1/capabilities` object (`features` matrix + `endpoints` map — the server's own
+route advertisement); `Model` wraps each entry of the `/v1/models` list. **Both
+lists are hardcoded single-element / non-paginating server-side**, so the
+plain-Array convention is permanently safe here. `Model#permission` is **not**
+exposed as a reader — the field is a structurally-always-empty `[]` (as are the
+`logprobs: []` arrays in chat/Responses output). Wire shapes:
+[`hermes-api-server.md`](hermes-api-server.md) → Discovery.
 
 ### `client.health` — health (root paths, no `/v1`)
 
@@ -778,18 +503,13 @@ client.health.check     # GET /health           => Health  (#status == "ok")
 client.health.detailed  # GET /health/detailed   => HealthDetails
 ```
 
-Observed (probing `hermes-test`): `/health/detailed` is a **superset** of
-`/health` — same `status` and `platform`, plus `gateway_state` (e.g.
-`"running"`), `platforms` (a map keyed by platform name, e.g. `api_server`,
-each `{ state, error_code, error_message, updated_at }`), `active_agents` (an
-integer count), `exit_reason` (nullable), and incidental `updated_at` / `pid`.
-(The earlier guess of "sessions / resource usage" was not borne out.)
-`HealthDetails` is an independent `Entity` (not a `Health` subclass) with a
-reader for every observed field: `status`, `platform`, `gateway_state`,
-`platforms`, `active_agents`, `exit_reason`, `updated_at`, and `pid`. The
-`platforms` reader returns a `Hash` keyed by platform name whose values are
-`PlatformStatus` entities (`state`, `error_code`, `error_message`,
-`updated_at`) rather than raw hashes.
+`HealthDetails` is an **independent `Entity`** (not a `Health` subclass) with a
+reader for every field of the detailed body (`status`, `platform`,
+`gateway_state`, `platforms`, `active_agents`, `exit_reason`, `updated_at`,
+`pid`). Its `platforms` reader returns a `Hash` keyed by platform name whose
+values are **`PlatformStatus`** sub-entities (`state`, `error_code`,
+`error_message`, `updated_at`) rather than raw hashes. Wire shapes:
+[`hermes-api-server.md`](hermes-api-server.md) → Health.
 
 ## Internal layering
 
@@ -824,110 +544,31 @@ reader for every observed field: `status`, `platform`, `gateway_state`,
   `ChatCompletion.from_chunks`, which ignores non-chunk events (the chat stream
   sends no final aggregate object, so it is reconstructed from the deltas).
 - **`Entity`** is the wrapper base (method readers + `#to_h` + `#[]`).
+- **JSON parsing has one chokepoint, `Util.parse_json`** (used by both
+  `Transport#handle` and `Stream#dispatch`): a body expected to be JSON but
+  unparseable raises **`MalformedResponseError`** — a direct `Error` subclass, not
+  an `APIError` (the HTTP request itself succeeded), carrying the raw text as
+  `#body` and the `JSON::ParserError` as `#cause`. This is distinct from a non-JSON
+  *error* body, which `APIError.parse_error_payload` deliberately tolerates (raw
+  text fallback for the router-level bare-text 404/405s — see Errors).
 
 This keeps auth, error mapping, and JSON handling in one place and makes the
 resource classes trivial to add as we map more of the API.
 
-## Open questions / to confirm
+## Known limitations & deferred work
 
-These need additional docs or experimentation against a live server. The
-`toys gateway` tools (start a local gateway, then probe endpoints and dump
-prettified JSON / raw SSE frames) are the means to resolve these against a
-running server; several below have been refined that way already.
+The endpoint request/response shapes, SSE events, error families, lifecycle, and
+pagination questions that this section once tracked are all resolved — their
+findings now live in the resource sections above and in
+[`hermes-api-server.md`](hermes-api-server.md). What remains:
 
-- Exact request bodies and response field names for each endpoint. Discovery,
-  chat completions, the Responses API (create/get/delete/stream, incl. the
-  non-streaming, deletion, and tool-item output shapes), the **Runs API**
-  (create body, poll/status, stop, and the full approval workflow), and the
-  **Jobs API** (entity shape, schedule union, create/update/delete/pause/resume/
-  trigger, lifecycle, and the mixed error envelope) are now mapped (see above and
-  `hermes-api-server.md`). ~~Runs leftovers: whether `create` accepts a `model:`
-  field, and the `failed`-status / `run.failed` shape.~~ **Both resolved
-  2026-05-24:** `create` accepts `model:` but ignores it (echoed on the Run,
-  real configured model used); the `failed` status / `run.failed` shape is
-  documented above (forced via a deliberately-invalid provider key — see the
-  source-derived note below). ~~Jobs leftover: the failing-run
-  `last_status`/`last_error` shape.~~ **Resolved 2026-05-24** (same invalid-key
-  trick on a recurring cron job): a failed run sets `last_status: "error"` and
-  `last_error` to the **exception-prefixed** message (e.g. `"RuntimeError:
-  Gemini HTTP 400 (INVALID_ARGUMENT): API key not valid. ..."` — note the
-  `RuntimeError:` prefix, unlike the run's bare `error`), leaves
-  `last_delivery_error` null (the agent failed before delivery), bumps
-  `repeat.completed`, and a recurring job **stays `state: "scheduled"`**.
-  ~~Remaining jobs leftover: the populated shapes of `origin` /
-  `enabled_toolsets`.~~ **Resolved from source 2026-05-24** — both are
-  **unreachable via the public API** (the create/PATCH handler forwards only
-  `name`/`schedule`/`prompt`/`deliver`/`skills`/`repeat`, never these), so the
-  client will never see them populated. Internal shapes (for reference, not
-  client-observable): `origin` is a dict `{platform, chat_id, thread_id?}` set
-  only by chat-platform adapters for `deliver: "origin"`; `enabled_toolsets`
-  is a flat `List[String]` of toolset names set via the in-agent `cronjob`
-  tool. The passthrough-no-wrapper modeling stands.
-- The full set of SSE event types and payloads. Chat-completion chunks
-  (including the custom `hermes.tool.progress` frames), the full Responses API
-  event sequence (including the terminal `response.completed`), and the **run
-  events stream** (`tool.*`, `message.delta`, `reasoning.available`,
-  `run.completed`/`run.cancelled`, `approval.request`/`approval.responded`) are
-  now captured (above).
-- ~~Whether list endpoints (`jobs`, `models`) paginate or always return full
-  arrays.~~ **Resolved from source 2026-05-24: neither paginates, structurally.**
-  `/v1/models` returns a **hardcoded single-element** `{object: "list", data:
-  [one model]}` (no cursor/limit, never >1 entry); `/api/jobs` returns the full
-  `{jobs: [...]}` with no pagination params — only an **undocumented
-  `?include_disabled=true|1`** filter (default **excludes** disabled jobs;
-  surfaced as `jobs.list(include_disabled: true)` and verified live). There are
-  no list endpoints for runs or responses.
-  The "list endpoints return plain Arrays" convention is permanently safe here.
-- ~~Structured error response shape (for `APIError#error`).~~ Captured above:
-  **three** families — OpenAI-style `{error: {...}}` for app-level errors
-  **and for auth 401 even on `/api/jobs`**; a **flat `{error: "<string>"}`** for
-  jobs business errors (`400`/`404`/`500`); and bare text for router-level
-  404/405. `APIError` parsing must handle all three. A jobs bad-`schedule` is a
-  `500` that is really a user-input rejection, so the `>= 500` ServerError body
-  is at least partly characterized now.
-- ~~Whether a convenience helper for `conversation` chaining is worth adding.~~
-  **Resolved — implemented** as `client.responses.conversation` (a stateful
-  `Conversation` wrapper; see the responses resource section). Supports both
-  client-side `previous_response_id` tracking (default) and server-side named
-  conversations (`name:`).
-- Retry/backoff policy (none planned for v1 unless the server signals retryable
+- **Chat aggregation assumes a single choice.** The server ignores OpenAI `n` and
+  always returns one `choices[0]` (see Chat), so `ChatCompletion.from_chunks`
+  reconstructs only `choices[0]` and the per-chunk readers read `choices.first`.
+  The aggregator is deliberately **left un-generalized** against this unused
+  surface; the raw per-choice data is still reachable via `ChatCompletionChunk#to_h`
+  if a future deployment honors `n` — only then generalize.
+- **No retry/backoff** in v1 (none planned unless the server signals retryable
   conditions).
-
-Known limitations in the current streaming implementation (deferred, revisit):
-
-- **Chat aggregation/readers assume a single choice — verified safe against
-  `hermes-test`.** `ChatCompletion.from_chunks` reconstructs only `choices[0]`
-  (concatenating every chunk's `delta.content` into one message), and the
-  per-chunk readers (`ChatCompletionChunk#delta`/`#role`/`#finish_reason`) read
-  `choices.first` too. **Probed (2026-05-24):** the gateway **ignores the
-  OpenAI `n` parameter**. Tested both non-streaming and streaming, `n` up to 5,
-  and — to rule out a deterministic prompt collapsing to one answer — with
-  open-ended creative prompts at high temperature (1.2–1.3); every case
-  returned a single `choices[0]` with no `index > 0`. So the single-choice
-  assumption is not exercised by this server, and the aggregator is
-  intentionally **left un-generalized** (grouping chunks by `choices[].index`
-  would be speculative work against an unused surface). If a future deployment
-  honors `n`, the raw per-choice data is still reachable via the enumerator form
-  (each `ChatCompletionChunk#to_h` retains the full `choices` array); only then
-  generalize the aggregator and per-chunk readers to emit one message per
-  choice.
-
-Resolved (were known limitations):
-
-- **Mid-stream connection/read failures are now mapped.** A socket/timeout
-  failure during stream iteration is translated to
-  `TimeoutError`/`ConnectionError` by `Transport#map_stream_errors` (see
-  Internal layering), not the raw `http`-gem exception. Behavior is
-  map-and-raise: chunks delivered before the failure stand, and no partial
-  aggregate is produced (partial-result recovery was considered and declined
-  for v1).
-- **Malformed JSON is now mapped — uniformly.** A body the client expected to
-  be JSON but cannot parse raises `MalformedResponseError` (a direct `Error`
-  subclass, *not* an `APIError` — the HTTP request itself succeeded; it carries
-  the unparseable text as `#body` and the `JSON::ParserError` as `#cause`)
-  rather than leaking a raw `JSON::ParserError`. The single chokepoint is
-  `Util.parse_json`, used by both `Transport#handle` (non-streaming) and
-  `Stream#dispatch` (a malformed SSE frame), so the two paths behave alike.
-  Note this is for bodies expected to be JSON; a non-JSON *error* body is still
-  deliberately tolerated by `APIError.parse_error_payload` (falling back to raw
-  text, for the server's router-level bare-text 404/405s).
+- Field mappings remain **best-effort pre-1.0**; `#to_h` / `#[]` and `**extra`
+  are the escape hatches as the API surface firms up.
