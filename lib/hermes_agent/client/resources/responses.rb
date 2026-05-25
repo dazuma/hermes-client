@@ -43,6 +43,17 @@ module HermesAgent
         #     to chain this turn onto. Omitted from the request when `nil`.
         # @param conversation [String, nil] A stable conversation name to chain
         #     this turn onto. Omitted from the request when `nil`.
+        # @param idempotency_key [String, nil] An idempotency key, sent as the
+        #     `Idempotency-Key` request header. The server caches the result for
+        #     ~5 minutes and replays it for a repeat call carrying the same key
+        #     and an equivalent request, so a retry does not re-run the model.
+        #     The replay is **transparent**: the response is indistinguishable
+        #     from a fresh one (same status, no replay header, and a freshly
+        #     regenerated `id`), so there is no way — here or in the returned
+        #     entity — to tell whether a given call was served from the cache.
+        #     Reusing a key with a *different* request silently recomputes (no
+        #     error) and overwrites the cached entry. Honored only on this
+        #     non-streaming endpoint (not on {#stream_create}).
         # @param extra [Hash] Additional request-body fields merged into the
         #     body as-is.
         # @return [Entities::Response] The response. Its
@@ -51,9 +62,10 @@ module HermesAgent
         #     accept a session on the request).
         # @raise [APIError] If the server returns a non-2xx response.
         #
-        def create(input:, previous_response_id: nil, conversation: nil, **extra)
+        def create(input:, previous_response_id: nil, conversation: nil, idempotency_key: nil, **extra)
           body = build_body(input, previous_response_id, conversation, extra)
-          result = @transport.post("/v1/responses", body)
+          headers = idempotency_key ? {"Idempotency-Key" => idempotency_key} : nil
+          result = @transport.post("/v1/responses", body, headers: headers)
           Entities::Response.new(result.body, **Util.session_headers(result.headers))
         end
 

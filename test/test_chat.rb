@@ -357,6 +357,24 @@ describe ::HermesAgent::Client::Resources::Chat do
     assert_instance_of(::HermesAgent::Client::Entities::ChatCompletion, completion)
     assert_equal("chat.completion", completion.object)
   end
+
+  it "sends the idempotency_key as an Idempotency-Key request header" do
+    ::HermesAgent::Client::Resources::Chat.new(transport).create(messages: messages, idempotency_key: "abc-123")
+    assert_equal("abc-123", transport.requested_headers["Idempotency-Key"])
+  end
+
+  it "omits the Idempotency-Key header when no idempotency_key is given" do
+    ::HermesAgent::Client::Resources::Chat.new(transport).create(messages: messages)
+    refute(transport.requested_headers.key?("Idempotency-Key")) if transport.requested_headers
+  end
+
+  it "sends the idempotency key alongside session headers" do
+    ::HermesAgent::Client::Resources::Chat.new(transport).create(
+      messages: messages, session_id: "sid-1", idempotency_key: "abc-123"
+    )
+    assert_equal("sid-1", transport.requested_headers["X-Hermes-Session-ID"])
+    assert_equal("abc-123", transport.requested_headers["Idempotency-Key"])
+  end
 end
 
 describe "Resources::Chat#stream_create" do
@@ -580,6 +598,19 @@ describe "chat" do
         session_id: session_id
       ) { |_event| nil }
       assert_equal(session_id, completion.session_id)
+    end
+
+    it "replays a repeated create carrying the same Idempotency-Key" do
+      key = ::SecureRandom.uuid
+      # An open-ended, high-temperature prompt makes content equality meaningful:
+      # a non-deduplicated re-run would almost certainly differ.
+      messages = [{role: "user", content: "Invent one surprising sentence about the sea. Be unpredictable."}]
+      first = client.chat.create(messages: messages, idempotency_key: key, temperature: 1.3)
+      second = client.chat.create(messages: messages, idempotency_key: key, temperature: 1.3)
+      # The cached agent result is replayed, so the content is identical — yet the
+      # dedup is otherwise transparent: the response id is regenerated per call.
+      assert_equal(first.choices.first.message.content, second.choices.first.message.content)
+      refute_equal(first.id, second.id, "expected the replayed completion to carry a freshly regenerated id")
     end
   end
 end

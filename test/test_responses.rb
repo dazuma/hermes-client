@@ -423,6 +423,11 @@ describe ::HermesAgent::Client::Resources::Responses do
     assert_equal("resp_1", response.id)
   end
 
+  it "sends the idempotency_key as an Idempotency-Key request header" do
+    ::HermesAgent::Client::Resources::Responses.new(transport).create(input: "hi", idempotency_key: "abc-123")
+    assert_equal("abc-123", transport.requested_headers["Idempotency-Key"])
+  end
+
   it "gets a response by id and wraps it in a Response entity" do
     response = ::HermesAgent::Client::Resources::Responses.new(transport).get("resp_1")
     assert_equal("/v1/responses/resp_1", transport.requested_path)
@@ -609,6 +614,22 @@ describe "responses" do
       refute_empty(response.output_text)
     ensure
       client.responses.delete(response.id) if response&.id
+    end
+
+    it "replays a repeated create carrying the same Idempotency-Key" do
+      key = ::SecureRandom.uuid
+      # An open-ended, high-temperature prompt makes content equality meaningful:
+      # a non-deduplicated re-run would almost certainly differ.
+      input = "Invent one surprising sentence about a mountain. Be unpredictable."
+      first = client.responses.create(input: input, idempotency_key: key, temperature: 1.3)
+      second = client.responses.create(input: input, idempotency_key: key, temperature: 1.3)
+      # The cached agent result is replayed, so the text is identical — yet the
+      # dedup is otherwise transparent: a fresh response id is minted per call.
+      assert_equal(first.output_text, second.output_text)
+      refute_equal(first.id, second.id, "expected the replayed response to carry a freshly regenerated id")
+    ensure
+      client.responses.delete(first.id) if first&.id
+      client.responses.delete(second.id) if second&.id
     end
   end
 end

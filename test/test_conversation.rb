@@ -14,7 +14,7 @@ class RecordingTransport
   # The request bodies seen, in order.
   attr_reader :bodies
 
-  def post(_path, body)
+  def post(_path, body, **)
     @bodies << body
     id = @ids[@index] || "resp_auto_#{@index}"
     @index += 1

@@ -45,16 +45,28 @@ module HermesAgent
         #     generates a fresh one (returned on {Entities::SessionHeaders#session_id}).
         # @param session_key [String, nil] A session key, sent as the
         #     `X-Hermes-Session-Key` request header.
+        # @param idempotency_key [String, nil] An idempotency key, sent as the
+        #     `Idempotency-Key` request header. The server caches the result for
+        #     ~5 minutes and replays it for a repeat call carrying the same key
+        #     and an equivalent request, so a retry does not re-run the model.
+        #     The replay is **transparent**: the response is indistinguishable
+        #     from a fresh one (same status, no replay header, and a freshly
+        #     regenerated `id`), so there is no way — here or in the returned
+        #     entity — to tell whether a given call was served from the cache.
+        #     Reusing a key with a *different* request silently recomputes (no
+        #     error) and overwrites the cached entry. Honored only on this
+        #     non-streaming endpoint (not on {#stream_create}).
         # @param extra [Hash] Additional request-body fields (e.g. sampling
         #     parameters) merged into the body as-is.
         # @return [Entities::ChatCompletion] The completion, carrying the
         #     session headers returned by the server.
         # @raise [APIError] If the server returns a non-2xx response.
         #
-        def create(messages:, session_id: nil, session_key: nil, **extra)
+        def create(messages:, session_id: nil, session_key: nil, idempotency_key: nil, **extra)
           body = {messages: messages, **extra}
-          result = @transport.post("/v1/chat/completions", body,
-                                   headers: session_request_headers(session_id, session_key))
+          headers = session_request_headers(session_id, session_key)
+          headers["Idempotency-Key"] = idempotency_key if idempotency_key
+          result = @transport.post("/v1/chat/completions", body, headers: headers)
           Entities::ChatCompletion.new(result.body, **Util.session_headers(result.headers))
         end
 
