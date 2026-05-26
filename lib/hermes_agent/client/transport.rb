@@ -227,7 +227,7 @@ module HermesAgent
                            .headers(default_headers)
             # Pass only the timeouts that are set: the `http` gem rejects a nil
             # value for any operation rather than treating it as "no limit".
-            timeouts = {read: @config.timeout, connect: @config.open_timeout,
+            timeouts = {read: @config.read_timeout, connect: @config.open_timeout,
                         write: @config.write_timeout}.compact
             result = result.timeout(timeouts) unless timeouts.empty?
             result

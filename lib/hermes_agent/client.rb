@@ -48,7 +48,7 @@ module HermesAgent
     # @param api_key [String, nil] The bearer token. When omitted, defaults to
     #     the `HERMES_API_KEY` environment variable (see {Configuration}); pass
     #     `nil` explicitly to send no `Authorization` header regardless.
-    # @param timeout [Numeric, nil] The read timeout in seconds.
+    # @param read_timeout [Numeric, nil] The read timeout in seconds.
     # @param open_timeout [Numeric, nil] The connection-open timeout in seconds.
     # @param write_timeout [Numeric, nil] The request-write timeout in seconds.
     # @param keep_alive_timeout [Numeric] How long an idle persistent
@@ -57,11 +57,11 @@ module HermesAgent
     #
     def initialize(base_url: Configuration::DEFAULT_BASE_URL,
                    api_key: UNSET,
-                   timeout: nil,
+                   read_timeout: nil,
                    open_timeout: nil,
                    write_timeout: nil,
                    keep_alive_timeout: Configuration::DEFAULT_KEEP_ALIVE_TIMEOUT)
-      @config = Configuration.new(base_url: base_url, timeout: timeout,
+      @config = Configuration.new(base_url: base_url, read_timeout: read_timeout,
                                   open_timeout: open_timeout, write_timeout: write_timeout,
                                   keep_alive_timeout: keep_alive_timeout)
       @config.api_key = api_key unless api_key.equal?(UNSET)

@@ -213,8 +213,9 @@ endpoint's streaming notes). `Stream` is told how to **classify** and how to
 client = HermesAgent::Client.new(
   base_url:   "http://127.0.0.1:8642",  # default; host root, not including /v1
   api_key:    ENV["HERMES_API_KEY"],    # default source for the bearer token
-  timeout:    nil,                       # read timeout (seconds)
-  open_timeout: nil,
+  read_timeout: nil,                     # read timeout (seconds)
+  open_timeout: nil,                     # connection-open timeout (seconds)
+  write_timeout: nil,                    # request-write timeout (seconds)
   keep_alive_timeout: 5,                 # persistent-connection idle reuse window (seconds)
 )
 ```
@@ -238,7 +239,8 @@ Notes:
   closed by the server, has been idle past the keep-alive window, or a prior
   request failed. `keep_alive_timeout:` (seconds; default `5`) tunes that idle
   reuse window — it is passed as `HTTP.persistent`'s `timeout:`, **not** a
-  request timeout (those are `timeout:`/`open_timeout:`). Because the session
+  request timeout (those are `read_timeout:`/`open_timeout:`/`write_timeout:`).
+  Because the session
   holds live connection state, the transport — and the `Client` — is **not
   thread-safe**; use one client per thread.
 - The bearer token is sent as `Authorization: Bearer <api_key>` on every

@@ -26,7 +26,7 @@ describe ::HermesAgent::Client::Configuration do
 
   it "defaults timeouts to nil" do
     config = config_class.new
-    assert_nil(config.timeout)
+    assert_nil(config.read_timeout)
     assert_nil(config.open_timeout)
     assert_nil(config.write_timeout)
   end
@@ -51,13 +51,13 @@ describe ::HermesAgent::Client::Configuration do
   it "lets keyword arguments override the defaults" do
     config = config_class.new(base_url: "https://example.test",
                               api_key: "secret",
-                              timeout: 30,
+                              read_timeout: 30,
                               open_timeout: 5,
                               write_timeout: 10,
                               keep_alive_timeout: 60)
     assert_equal("https://example.test", config.base_url)
     assert_equal("secret", config.api_key)
-    assert_equal(30, config.timeout)
+    assert_equal(30, config.read_timeout)
     assert_equal(5, config.open_timeout)
     assert_equal(10, config.write_timeout)
     assert_equal(60, config.keep_alive_timeout)

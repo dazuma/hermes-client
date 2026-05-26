@@ -313,7 +313,7 @@ describe ::HermesAgent::Client::Transport do
   end
 
   it "applies the configured read, write, and connect timeouts to the persistent session" do
-    tr = transport(base_url: "https://example.test", timeout: 30, write_timeout: 10, open_timeout: 5)
+    tr = transport(base_url: "https://example.test", read_timeout: 30, write_timeout: 10, open_timeout: 5)
     options = tr.send(:session).send(:default_options).timeout_options
     assert_equal(30, options[:read_timeout])
     assert_equal(10, options[:write_timeout])
@@ -326,7 +326,7 @@ describe ::HermesAgent::Client::Transport do
   end
 
   it "builds a session with only the read timeout set (no nil passed to the http gem)" do
-    tr = transport(base_url: "https://example.test", timeout: 30)
+    tr = transport(base_url: "https://example.test", read_timeout: 30)
     options = tr.send(:session).send(:default_options).timeout_options
     assert_equal({read_timeout: 30}, options)
   end

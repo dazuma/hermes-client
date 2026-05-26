@@ -30,8 +30,8 @@ module HermesAgent
       # @param api_key [String, nil] The bearer token sent on every request, or
       #     `nil` to send no `Authorization` header. Defaults to the
       #     `HERMES_API_KEY` environment variable.
-      # @param timeout [Numeric, nil] The read timeout in seconds, or `nil` for
-      #     no client-side limit.
+      # @param read_timeout [Numeric, nil] The read timeout in seconds, or `nil`
+      #     for no client-side limit.
       # @param open_timeout [Numeric, nil] The connection-open timeout in
       #     seconds, or `nil` for no client-side limit.
       # @param write_timeout [Numeric, nil] The timeout in seconds for writing
@@ -43,13 +43,13 @@ module HermesAgent
       #
       def initialize(base_url: DEFAULT_BASE_URL,
                      api_key: ENV.fetch("HERMES_API_KEY", nil),
-                     timeout: nil,
+                     read_timeout: nil,
                      open_timeout: nil,
                      write_timeout: nil,
                      keep_alive_timeout: DEFAULT_KEEP_ALIVE_TIMEOUT)
         @base_url = base_url
         @api_key = api_key
-        @timeout = timeout
+        @read_timeout = read_timeout
         @open_timeout = open_timeout
         @write_timeout = write_timeout
         @keep_alive_timeout = keep_alive_timeout
@@ -71,7 +71,7 @@ module HermesAgent
       # The read timeout in seconds, or `nil` for no client-side limit.
       # @return [Numeric, nil]
       #
-      attr_accessor :timeout
+      attr_accessor :read_timeout
 
       ##
       # The connection-open timeout in seconds, or `nil` for no client-side
