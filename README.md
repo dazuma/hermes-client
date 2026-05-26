@@ -50,6 +50,15 @@ For more information, see the
 Full API documentation is available at https://dazuma.github.io/hermes-client
 for released gems.
 
+## Requirements and status
+
+`hermes-client` requires Ruby 3.4 or later.
+
+The gem can be considered alpha quality. Initial development is complete, but
+the library has seen minimal real-world testing, and it may experience
+significant changes, including breaking interface changes. It is available now
+on an experimental basis, but not currently recommended for production use.
+
 ## Contributing
 
 Development is done in GitHub at https://github.com/dazuma/hermes-client.
@@ -71,7 +80,7 @@ probing of a live gateway. Documents related to our findings are available in
 the `devdocs` directory, and some Toys-based probing tools are also included in
 this repository. (These are not included in the gem distribution.)
 
-Most of the heavy lifting in the original implementation and documentation, as
+Much of the heavy lifting in the original implementation and documentation, as
 well as the research behind it into the actual behavior of the gateway API, was
 done in close collaboration with Claude Code (Opus 4.7).
 
