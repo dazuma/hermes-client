@@ -42,6 +42,7 @@ module HermesAgent
       # @raise [ArgumentError] If both `name` and `previous_response_id` are
       #     given (they select different chaining mechanisms).
       #
+      # @private
       def initialize(responses, name: nil, previous_response_id: nil)
         raise ::ArgumentError, "name and previous_response_id are mutually exclusive" if name && previous_response_id
 

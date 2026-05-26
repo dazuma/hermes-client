@@ -10,6 +10,7 @@ module HermesAgent
     # Internal helpers shared across the client's layers. Not part of the
     # public API.
     #
+    # @private
     module Util
       ##
       # The downcased response-header name carrying the session id.

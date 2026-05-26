@@ -28,6 +28,7 @@ module HermesAgent
         # @param session_key [String, nil] The `X-Hermes-Session-Key` header
         #     value, or `nil` if the response did not carry one.
         #
+        # @private
         def initialize(data, session_id: nil, session_key: nil)
           @session_id = session_id
           @session_key = session_key

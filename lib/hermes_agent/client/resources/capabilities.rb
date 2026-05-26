@@ -15,6 +15,7 @@ module HermesAgent
         #
         # @param transport [Transport] The transport used to issue requests.
         #
+        # @private
         def initialize(transport)
           @transport = transport
         end

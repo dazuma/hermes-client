@@ -25,7 +25,7 @@ module HermesAgent
     #
     # The class is HTTP-agnostic — it consumes anything that yields String
     # byte chunks via `#each` (the `http` gem's response body, or an array of
-    # chunks in tests) — which keeps {Transport} the sole owner of the
+    # chunks in tests) — which keeps `Transport` the sole owner of the
     # connection.
     #
     class Stream
@@ -50,6 +50,7 @@ module HermesAgent
       #     block returns the aggregated {#result}. Optional — without it
       #     {#result} is `nil`.
       #
+      # @private
       def initialize(chunks, event_class:, terminator: nil, &aggregator)
         @chunks = chunks
         @event_class = event_class

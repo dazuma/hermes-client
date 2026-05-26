@@ -24,6 +24,7 @@ module HermesAgent
         #
         # @param transport [Transport] The transport used to issue requests.
         #
+        # @private
         def initialize(transport)
           @transport = transport
         end
@@ -106,7 +107,7 @@ module HermesAgent
         # a caller could clobber it. It exists for {Conversation} to capture the
         # new response id for chaining; it is not part of the public API.
         #
-        # @!visibility private
+        # @private
         # @param on_result [#call, nil] Called with the assembled
         #     {Entities::Response} when the stream's result is built. May be nil.
         # @param input [String, Array<Hash>] The input (see {#create}).

@@ -33,6 +33,7 @@ module HermesAgent
     # more verbs (`patch`) and richer error mapping will be added as further
     # endpoints are built out.
     #
+    # @private
     class Transport
       ##
       # The outcome of a request whose response headers matter to the caller:

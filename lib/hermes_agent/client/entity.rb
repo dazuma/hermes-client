@@ -29,6 +29,7 @@ module HermesAgent
       #
       # @param data [Hash] The parsed response body, with string keys.
       #
+      # @private
       def initialize(data)
         @data = (data.nil? ? {} : data).freeze
         freeze
