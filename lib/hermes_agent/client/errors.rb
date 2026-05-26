@@ -39,6 +39,7 @@ module HermesAgent
       # @param message [String] The human-readable error message.
       # @param body [String, nil] The raw text that could not be parsed.
       #
+      # @private
       def initialize(message, body: nil)
         super(message)
         @body = body
@@ -61,8 +62,8 @@ module HermesAgent
     #
     # ## Error payloads
     #
-    # The server uses three distinct error formats, all of which
-    # {from_response} accommodates. Application-level errors (authentication,
+    # The server uses three distinct error formats, all of which the client
+    # handles when building the error. Application-level errors (authentication,
     # body validation, missing resources on the `/v1` surface) return an
     # OpenAI-style JSON body of the form `{"error": {"message", "type",
     # "param"?, "code"?}}`, and {#error} exposes that inner hash. The jobs
@@ -90,6 +91,7 @@ module HermesAgent
       # @param headers [Hash] The response headers.
       # @return [APIError] An instance of the subclass matching the status.
       #
+      # @private
       def self.from_response(status:, body:, headers: {})
         inner = error_field(body)
         error = inner if inner.is_a?(::Hash)
@@ -128,7 +130,7 @@ module HermesAgent
       private_class_method :error_field
 
       ##
-      # Create an API error. Prefer {from_response}, which selects the correct
+      # Create an API error. Prefer `from_response`, which selects the correct
       # subclass and parses the payload for you.
       #
       # @param message [String] The human-readable error message.
@@ -138,6 +140,7 @@ module HermesAgent
       # @param error [Hash, nil] The parsed structured error hash, if the body
       #     carried one.
       #
+      # @private
       def initialize(message, status:, body:, headers: {}, error: nil)
         super(message)
         @status = status

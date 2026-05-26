@@ -25,8 +25,8 @@ module HermesAgent
     #
     # The class is HTTP-agnostic — it consumes anything that yields String
     # byte chunks via `#each` (the `http` gem's response body, or an array of
-    # chunks in tests) — which keeps `Transport` the sole owner of the
-    # connection.
+    # chunks in tests) — so it never owns or manages the network connection
+    # itself.
     #
     class Stream
       include ::Enumerable

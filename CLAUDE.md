@@ -49,7 +49,7 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 - **Dependencies:** the client is built on the [`http`](https://github.com/httprb/http) gem (`~> 6.0`) for HTTP requests. Server-Sent Event streams are parsed in-house (`HermesAgent::Client::Stream`) over the same `http` connection, so there is no separate SSE dependency.
 - **Ruby support:** `required_ruby_version >= 3.4`. All files use `# frozen_string_literal: true`.
 - **Docs as a gate:** because `toys yardoc` fails on undocumented objects, document public API as you add it.
-- **Commit messages:** Use Conventional Commits prefixes. Use `chore:` for changes that are not shipped in the packaged gem (e.g. `devdocs/`, tooling, CI), and reserve `feat:`/`fix:`/etc. for changes to the gem's user-visible code.
+- **Commit messages:** Use Conventional Commits prefixes. Use `chore:` for changes that are not shipped in the packaged gem (e.g. `devdocs/`, tooling, CI), and reserve `feat:`/`fix:`/etc. for changes to the gem's user-visible code. Use `docs:` for documentation-only changes — including edits to **shipped** YARD comments in `lib/` (the published API docs), which are not `chore:` because they ship, but not `feat:`/`fix:` because they change no behavior.
 
 ## Testing conventions
 
