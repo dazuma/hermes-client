@@ -91,8 +91,10 @@ module HermesAgent
       # @return [APIError] An instance of the subclass matching the status.
       #
       def self.from_response(status:, body:, headers: {})
-        error = parse_error_payload(body)
-        message = (error && error["message"]) || parse_flat_message(body) ||
+        inner = error_field(body)
+        error = inner if inner.is_a?(::Hash)
+        message = (error && error["message"]) ||
+                  (inner if inner.is_a?(::String)) ||
                   "Unexpected HTTP status #{status}"
         class_for_status(status).new(message, status: status, body: body,
                                               headers: headers, error: error)
@@ -112,29 +114,18 @@ module HermesAgent
       end
       private_class_method :class_for_status
 
-      # Pull the inner `error` hash out of a response body, tolerating the
-      # server's non-JSON (router-level) error bodies by returning nil.
-      def self.parse_error_payload(body)
+      # Pull the body's top-level `error` field out in a single JSON parse: the
+      # inner hash for the OpenAI-style envelope (`{"error":{...}}`) or the flat
+      # string for the jobs business errors (`{"error":"..."}`). The caller
+      # branches on the returned type. Returns nil when the body carries no
+      # `error` field or is a non-JSON (router-level) error body.
+      def self.error_field(body)
         parsed = ::JSON.parse(body.to_s)
-        inner = parsed["error"] if parsed.is_a?(::Hash)
-        inner if inner.is_a?(::Hash)
+        parsed["error"] if parsed.is_a?(::Hash)
       rescue ::JSON::ParserError
         nil
       end
-      private_class_method :parse_error_payload
-
-      # Pull a flat string `error` message out of a response body, the shape the
-      # jobs business errors (400/404/500) use instead of the nested `/v1`
-      # envelope. Returns nil for any other shape (including the nested hash,
-      # which {parse_error_payload} handles) or a non-JSON body.
-      def self.parse_flat_message(body)
-        parsed = ::JSON.parse(body.to_s)
-        inner = parsed["error"] if parsed.is_a?(::Hash)
-        inner if inner.is_a?(::String)
-      rescue ::JSON::ParserError
-        nil
-      end
-      private_class_method :parse_flat_message
+      private_class_method :error_field
 
       ##
       # Create an API error. Prefer {from_response}, which selects the correct
