@@ -112,7 +112,8 @@ HermesAgent::Client::Error                 (base; rescue this to catch all)
     ServerError            (>= 500)
 ```
 
-`APIError` carries `#status`, `#headers`, `#body` (raw) and a parsed
+`APIError` carries `#status`, `#headers` (downcased-key normalized, same as the
+success path), `#body` (raw) and a parsed
 `#error` hash when the server returns a structured error.
 
 The server emits **three** error-envelope shapes (nested OpenAI-style JSON; a
@@ -127,7 +128,8 @@ means for the client:
 - **`APIError#error` parsing must not assume JSON.** Parse defensively and fall
   back to `#body` for the bare-text router errors, and accept **either** a nested
   `error.message` **or** a flat string `error` (jobs). This lives in
-  `APIError.parse_error_payload`.
+  `APIError.error_field` (a single JSON parse feeding both the nested-hash and
+  flat-string branches).
 - **Structured fields are best-effort:** `message`/`type` are usually present but
   `param`/`code` may be `null` or omitted — treat the readers accordingly.
 - A bad jobs `schedule` is a **`500`** that is really invalid input, so the
@@ -469,7 +471,8 @@ specific decisions that convention alone doesn't settle):
   doc explains why and gives their internal shapes). Keep them as plain
   passthrough readers (raw value / `nil`), with `#to_h` / `#[]` as the escape
   hatch — do **not** invent wrapper classes.
-- Boolean readers `enabled?` / `no_agent?` (per the boolean-reader convention).
+- Boolean readers: `no_agent?` is strict (`!!` — absent means the agent runs)
+  while `enabled?` is a nilable passthrough; see the boolean-reader convention.
 - **Timestamps stay strings.** `created_at` / `next_run_at` / `last_run_at` /
   `paused_at` are **ISO-8601 strings with offset** — unlike the runs/responses
   epoch-float timestamps. Expose them verbatim (no Time parsing); just note the
@@ -562,7 +565,7 @@ values are **`PlatformStatus`** sub-entities (`state`, `error_code`,
   unparseable raises **`MalformedResponseError`** — a direct `Error` subclass, not
   an `APIError` (the HTTP request itself succeeded), carrying the raw text as
   `#body` and the `JSON::ParserError` as `#cause`. This is distinct from a non-JSON
-  *error* body, which `APIError.parse_error_payload` deliberately tolerates (raw
+  *error* body, which `APIError.error_field` deliberately tolerates (raw
   text fallback for the router-level bare-text 404/405s — see Errors).
 
 This keeps auth, error mapping, and JSON handling in one place and makes the
