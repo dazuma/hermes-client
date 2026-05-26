@@ -205,7 +205,16 @@ module HermesAgent
     end
 
     ##
-    # Raised on a `429` response: the client has been rate limited.
+    # Raised on a `429` response: the request was refused for exceeding a
+    # server-side limit. In practice the server raises this only when a new run
+    # would exceed its fixed ceiling of concurrent runs; the limit clears as
+    # in-flight runs finish, not after a fixed interval.
+    #
+    # The server sends **no `Retry-After` header or other timing hint**, so the
+    # client does not retry automatically — whether and when to retry is left to
+    # the caller. Because the limit is concurrency- rather than time-based, a
+    # short pause (or simply retrying once an in-flight run completes) is more
+    # apt than fixed exponential backoff.
     #
     class RateLimitError < APIError
     end

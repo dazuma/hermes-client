@@ -584,7 +584,19 @@ findings now live in the resource sections above and in
   The aggregator is deliberately **left un-generalized** against this unused
   surface; the raw per-choice data is still reachable via `ChatCompletionChunk#to_h`
   if a future deployment honors `n` — only then generalize.
-- **No retry/backoff** in v1 (none planned unless the server signals retryable
-  conditions).
+- **No retry/backoff** — resolved as *won't build*, not merely deferred. A read
+  of the gateway source (`gateway/platforms/api_server.py`) confirms the server
+  signals **no automatically-retryable condition**: it sends no `Retry-After`
+  header (every `Retry-After` in the gateway tree is in the chat-platform
+  adapters, where the gateway is a *client* of Signal/Discord/etc.), emits no
+  `503`, and gives no timing hint. The only `429` is a fixed concurrent-runs
+  ceiling on `POST /v1/runs` (`_MAX_CONCURRENT_RUNS`, code `rate_limit_exceeded`,
+  no headers); it is concurrency- not time-based, so it clears when an in-flight
+  run finishes rather than after a wall-clock interval — a poor fit for blind
+  exponential backoff. The `502` (`agent_incomplete`) is a terminal per-run
+  outcome, not a transient condition. The client therefore surfaces these as
+  catchable errors (`429` → `RateLimitError`, `5xx` → `ServerError`) and leaves
+  the retry decision to the caller. Revisit only if a future server build starts
+  sending `Retry-After`/`503`.
 - Field mappings remain **best-effort pre-1.0**; `#to_h` / `#[]` and `**extra`
   are the escape hatches as the API surface firms up.
