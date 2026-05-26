@@ -212,11 +212,12 @@ module HermesAgent
 
         ##
         # Whether the LLM is skipped entirely: the {#script} runs and its stdout
-        # is delivered verbatim (the watchdog pattern).
-        # @return [boolean, nil]
+        # is delivered verbatim (the watchdog pattern). Defaults to `false` (the
+        # agent runs) when the field is absent.
+        # @return [boolean]
         #
         def no_agent?
-          self["no_agent"]
+          !!self["no_agent"]
         end
 
         ##

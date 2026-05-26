@@ -48,11 +48,12 @@ module HermesAgent
         end
 
         ##
-        # Whether the runtime is split between client and server.
-        # @return [boolean, nil]
+        # Whether the runtime is split between client and server. A runtime
+        # that does not advertise this is treated as not split (`false`).
+        # @return [boolean]
         #
         def split_runtime?
-          self["split_runtime"]
+          !!self["split_runtime"]
         end
 
         ##
@@ -67,105 +68,106 @@ module HermesAgent
       ##
       # The server's feature matrix ({Capabilities#features}).
       #
-      # Each reader returns the advertised flag (a boolean), or `nil` when the
-      # server does not advertise that feature. Readers are best-effort; use
-      # {#[]} / {#to_h} for any feature not yet modeled here.
+      # Each reader returns whether the server advertises that feature: `true`
+      # when the flag is set, `false` when it is unset or absent (an
+      # unadvertised feature is treated as unsupported). Readers are
+      # best-effort; use {#[]} / {#to_h} for any feature not yet modeled here.
       #
       class Features < Entity
         ##
         # Whether the chat-completions endpoint is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def chat_completions?
-          self["chat_completions"]
+          !!self["chat_completions"]
         end
 
         ##
         # Whether chat-completions streaming is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def chat_completions_streaming?
-          self["chat_completions_streaming"]
+          !!self["chat_completions_streaming"]
         end
 
         ##
         # Whether the Responses API is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def responses_api?
-          self["responses_api"]
+          !!self["responses_api"]
         end
 
         ##
         # Whether Responses API streaming is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def responses_streaming?
-          self["responses_streaming"]
+          !!self["responses_streaming"]
         end
 
         ##
         # Whether run submission is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def run_submission?
-          self["run_submission"]
+          !!self["run_submission"]
         end
 
         ##
         # Whether run status polling is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def run_status?
-          self["run_status"]
+          !!self["run_status"]
         end
 
         ##
         # Whether the run events SSE stream is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def run_events_sse?
-          self["run_events_sse"]
+          !!self["run_events_sse"]
         end
 
         ##
         # Whether stopping a run is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def run_stop?
-          self["run_stop"]
+          !!self["run_stop"]
         end
 
         ##
         # Whether responding to a run approval request is supported.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def run_approval_response?
-          self["run_approval_response"]
+          !!self["run_approval_response"]
         end
 
         ##
         # Whether the server emits custom tool-progress events.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def tool_progress_events?
-          self["tool_progress_events"]
+          !!self["tool_progress_events"]
         end
 
         ##
         # Whether the server emits approval events.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def approval_events?
-          self["approval_events"]
+          !!self["approval_events"]
         end
 
         ##
         # Whether CORS is enabled.
-        # @return [boolean, nil]
+        # @return [boolean]
         #
         def cors?
-          self["cors"]
+          !!self["cors"]
         end
 
         ##

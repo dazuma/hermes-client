@@ -30,11 +30,11 @@ describe ::HermesAgent::Client::Entities::Runtime do
     assert_equal("The API server creates a server-side Hermes AIAgent.", runtime.description)
   end
 
-  it "returns nil for fields when absent" do
+  it "returns nil for string fields and false for the boolean flag when absent" do
     runtime = ::HermesAgent::Client::Entities::Runtime.new({})
     assert_nil(runtime.mode)
     assert_nil(runtime.tool_execution)
-    assert_nil(runtime.split_runtime?)
+    assert_equal(false, runtime.split_runtime?)
     assert_nil(runtime.description)
   end
 end
@@ -79,10 +79,10 @@ describe ::HermesAgent::Client::Entities::Features do
     assert_equal("X-Hermes-Session-Key", features.session_key_header)
   end
 
-  it "returns nil for features when absent" do
+  it "defaults absent boolean features to false and absent string fields to nil" do
     features = ::HermesAgent::Client::Entities::Features.new({})
-    assert_nil(features.chat_completions?)
-    assert_nil(features.cors?)
+    assert_equal(false, features.chat_completions?)
+    assert_equal(false, features.cors?)
     assert_nil(features.session_continuity_header)
     assert_nil(features.session_key_header)
   end
