@@ -50,6 +50,7 @@ module HermesAgent
     #     `nil` explicitly to send no `Authorization` header regardless.
     # @param timeout [Numeric, nil] The read timeout in seconds.
     # @param open_timeout [Numeric, nil] The connection-open timeout in seconds.
+    # @param write_timeout [Numeric, nil] The request-write timeout in seconds.
     # @param keep_alive_timeout [Numeric] How long an idle persistent
     #     connection may be reused before being reopened. See {Configuration}.
     # @yieldparam config [Configuration] The configuration, for customization.
@@ -58,9 +59,10 @@ module HermesAgent
                    api_key: UNSET,
                    timeout: nil,
                    open_timeout: nil,
+                   write_timeout: nil,
                    keep_alive_timeout: Configuration::DEFAULT_KEEP_ALIVE_TIMEOUT)
       @config = Configuration.new(base_url: base_url, timeout: timeout,
-                                  open_timeout: open_timeout,
+                                  open_timeout: open_timeout, write_timeout: write_timeout,
                                   keep_alive_timeout: keep_alive_timeout)
       @config.api_key = api_key unless api_key.equal?(UNSET)
       yield @config if block_given?

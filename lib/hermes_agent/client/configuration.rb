@@ -34,6 +34,8 @@ module HermesAgent
       #     no client-side limit.
       # @param open_timeout [Numeric, nil] The connection-open timeout in
       #     seconds, or `nil` for no client-side limit.
+      # @param write_timeout [Numeric, nil] The timeout in seconds for writing
+      #     a request, or `nil` for no client-side limit.
       # @param keep_alive_timeout [Numeric] How long, in seconds, an idle
       #     persistent connection may be reused before it is considered stale
       #     and reopened on the next request. Defaults to
@@ -43,11 +45,13 @@ module HermesAgent
                      api_key: ENV.fetch("HERMES_API_KEY", nil),
                      timeout: nil,
                      open_timeout: nil,
+                     write_timeout: nil,
                      keep_alive_timeout: DEFAULT_KEEP_ALIVE_TIMEOUT)
         @base_url = base_url
         @api_key = api_key
         @timeout = timeout
         @open_timeout = open_timeout
+        @write_timeout = write_timeout
         @keep_alive_timeout = keep_alive_timeout
       end
 
@@ -75,6 +79,13 @@ module HermesAgent
       # @return [Numeric, nil]
       #
       attr_accessor :open_timeout
+
+      ##
+      # The request-write timeout in seconds, or `nil` for no client-side
+      # limit.
+      # @return [Numeric, nil]
+      #
+      attr_accessor :write_timeout
 
       ##
       # How long, in seconds, an idle persistent connection may be reused before

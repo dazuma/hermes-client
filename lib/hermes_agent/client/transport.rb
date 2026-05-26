@@ -225,9 +225,11 @@ module HermesAgent
           begin
             result = ::HTTP.persistent(@config.base_url, timeout: @config.keep_alive_timeout)
                            .headers(default_headers)
-            if @config.timeout || @config.open_timeout
-              result = result.timeout(read: @config.timeout, connect: @config.open_timeout)
-            end
+            # Pass only the timeouts that are set: the `http` gem rejects a nil
+            # value for any operation rather than treating it as "no limit".
+            timeouts = {read: @config.timeout, connect: @config.open_timeout,
+                        write: @config.write_timeout}.compact
+            result = result.timeout(timeouts) unless timeouts.empty?
             result
           end
       end

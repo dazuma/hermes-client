@@ -28,6 +28,7 @@ describe ::HermesAgent::Client::Configuration do
     config = config_class.new
     assert_nil(config.timeout)
     assert_nil(config.open_timeout)
+    assert_nil(config.write_timeout)
   end
 
   it "defaults keep_alive_timeout to 5 seconds" do
@@ -52,11 +53,13 @@ describe ::HermesAgent::Client::Configuration do
                               api_key: "secret",
                               timeout: 30,
                               open_timeout: 5,
+                              write_timeout: 10,
                               keep_alive_timeout: 60)
     assert_equal("https://example.test", config.base_url)
     assert_equal("secret", config.api_key)
     assert_equal(30, config.timeout)
     assert_equal(5, config.open_timeout)
+    assert_equal(10, config.write_timeout)
     assert_equal(60, config.keep_alive_timeout)
   end
 

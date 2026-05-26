@@ -312,6 +312,25 @@ describe ::HermesAgent::Client::Transport do
     assert_equal(42, tr.send(:session).send(:default_options).keep_alive_timeout)
   end
 
+  it "applies the configured read, write, and connect timeouts to the persistent session" do
+    tr = transport(base_url: "https://example.test", timeout: 30, write_timeout: 10, open_timeout: 5)
+    options = tr.send(:session).send(:default_options).timeout_options
+    assert_equal(30, options[:read_timeout])
+    assert_equal(10, options[:write_timeout])
+    assert_equal(5, options[:connect_timeout])
+  end
+
+  it "applies the write timeout even when read and connect timeouts are unset" do
+    tr = transport(base_url: "https://example.test", write_timeout: 10)
+    assert_equal(10, tr.send(:session).send(:default_options).timeout_options[:write_timeout])
+  end
+
+  it "builds a session with only the read timeout set (no nil passed to the http gem)" do
+    tr = transport(base_url: "https://example.test", timeout: 30)
+    options = tr.send(:session).send(:default_options).timeout_options
+    assert_equal({read_timeout: 30}, options)
+  end
+
   it "opens a fresh connection and recovers after a broken one" do
     stub_request(:get, "https://example.test/health")
       .to_raise(::HTTP::ConnectionError).then
