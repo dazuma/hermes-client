@@ -50,6 +50,7 @@ one. Tests use minitest (`test/helper.rb` sets up autorun, focus, and rg).
 - **Ruby support:** `required_ruby_version >= 3.4`. All files use `# frozen_string_literal: true`.
 - **Docs as a gate:** because `toys yardoc` fails on undocumented objects, document public API as you add it.
 - **Commit messages:** Use Conventional Commits prefixes. Use `chore:` for changes that are not shipped in the packaged gem (e.g. `devdocs/`, tooling, CI), and reserve `feat:`/`fix:`/etc. for changes to the gem's user-visible code. Use `docs:` for documentation-only changes — including edits to **shipped** YARD comments in `lib/` (the published API docs), which are not `chore:` because they ship, but not `feat:`/`fix:` because they change no behavior.
+- **Top-level constant references:** prefix references to Ruby core/stdlib and external-gem constants with a leading `::` (e.g. `::Hash`, `::JSON`, `::HTTP`, `::ENV`, `::StandardError`). This applies to **constant** references only — **not** to YARD type annotations in comments (write `@return [String]`, not `[::String]`), **not** to the gem's own constants (referenced relatively, e.g. `Entities::Job`, `Run`), and **not** to method calls such as `Kernel#Array` (`Array(x)`, never `::Array(x)` — `::` prefixes constants, not methods).
 
 ## Testing conventions
 

@@ -10,9 +10,9 @@ module HermesAgent
       # runs. Unlike chat completions and the Responses API, a run is
       # **server-side asynchronous**: {#create} returns immediately (HTTP `202`)
       # with a minimal {Entities::Run} carrying only its `run_id` and `status`,
-      # and progress is tracked by polling {#get} (or, later, by subscribing to
-      # the event stream). On a server configured with an API key, these calls
-      # require a bearer token (see {Client} / {Configuration}).
+      # and progress is tracked by polling {#get} or by subscribing to its
+      # event stream with {#stream_events}. On a server configured with an API
+      # key, these calls require a bearer token (see {Client} / {Configuration}).
       #
       # Run records are retained only briefly after they reach a terminal
       # status, then evicted, so callers should not assume an older run remains

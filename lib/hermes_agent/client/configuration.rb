@@ -42,7 +42,7 @@ module HermesAgent
       #     {DEFAULT_KEEP_ALIVE_TIMEOUT}.
       #
       def initialize(base_url: DEFAULT_BASE_URL,
-                     api_key: ENV.fetch("HERMES_API_KEY", nil),
+                     api_key: ::ENV.fetch("HERMES_API_KEY", nil),
                      read_timeout: nil,
                      open_timeout: nil,
                      write_timeout: nil,
