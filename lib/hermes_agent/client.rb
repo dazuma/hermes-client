@@ -32,6 +32,11 @@ module HermesAgent
   # application, you should create a separate client object per thread.
   #
   class Client
+    # Sentinel distinguishing an omitted `api_key:` (defer to {Configuration}'s
+    # `HERMES_API_KEY` default) from an explicit `nil` (send no auth header).
+    UNSET = ::Object.new
+    private_constant :UNSET
+
     ##
     # Create a client.
     #
@@ -40,7 +45,9 @@ module HermesAgent
     # arguments are applied).
     #
     # @param base_url [String] The server root URL. See {Configuration}.
-    # @param api_key [String, nil] The bearer token. See {Configuration}.
+    # @param api_key [String, nil] The bearer token. When omitted, defaults to
+    #     the `HERMES_API_KEY` environment variable (see {Configuration}); pass
+    #     `nil` explicitly to send no `Authorization` header regardless.
     # @param timeout [Numeric, nil] The read timeout in seconds.
     # @param open_timeout [Numeric, nil] The connection-open timeout in seconds.
     # @param keep_alive_timeout [Numeric] How long an idle persistent
@@ -48,13 +55,14 @@ module HermesAgent
     # @yieldparam config [Configuration] The configuration, for customization.
     #
     def initialize(base_url: Configuration::DEFAULT_BASE_URL,
-                   api_key: ENV.fetch("HERMES_API_KEY", nil),
+                   api_key: UNSET,
                    timeout: nil,
                    open_timeout: nil,
                    keep_alive_timeout: Configuration::DEFAULT_KEEP_ALIVE_TIMEOUT)
-      @config = Configuration.new(base_url: base_url, api_key: api_key,
-                                  timeout: timeout, open_timeout: open_timeout,
+      @config = Configuration.new(base_url: base_url, timeout: timeout,
+                                  open_timeout: open_timeout,
                                   keep_alive_timeout: keep_alive_timeout)
+      @config.api_key = api_key unless api_key.equal?(UNSET)
       yield @config if block_given?
       @transport = Transport.new(@config)
     end
