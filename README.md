@@ -41,6 +41,9 @@ briefing_job = hermes_client.jobs.create(
 puts "Daily-briefing will next run at #{briefing_job.next_run_at}"
 ```
 
+A client is not thread-safe (it holds a persistent connection); create one
+client per thread.
+
 For more information, see the
 [Hermes Gateway API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server).
 
