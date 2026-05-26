@@ -29,10 +29,6 @@ module HermesAgent
     # thread-safe**; multithreaded callers should use a separate client per
     # thread.
     #
-    # Only the subset needed by the currently implemented resources is present;
-    # more verbs (`patch`) and richer error mapping will be added as further
-    # endpoints are built out.
-    #
     # @private
     class Transport
       ##

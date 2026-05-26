@@ -3,7 +3,7 @@
 --markup=markdown
 --markup-provider redcarpet
 --main=README.md
-./lib/hermes_agent/client/**/*.rb
+./lib/hermes_agent/**/*.rb
 ./lib/hermes-client.rb
 -
 README.md
